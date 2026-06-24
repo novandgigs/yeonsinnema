@@ -1,12 +1,10 @@
-import React, { useState, useEffect } from 'react';
-import { MessageSquare, CalendarDays, Users, LogOut, Star, CheckCircle2, UserPlus, LogIn, Quote, Clapperboard, Settings, Lock, X, Trash2 } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { MessageSquare, CalendarDays, Users, LogOut, Star, CheckCircle2, UserPlus, LogIn, Quote, Clapperboard, Settings, Lock, X, Trash2, MessageCircle, Send } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'firebase/auth';
 import { getFirestore, collection, doc, setDoc, getDoc, onSnapshot, addDoc, deleteDoc } from 'firebase/firestore';
 
 // --- 관리자 설정 (영화 정보 및 포스터 변경) ---
-// 사장님, 아래 정보의 따옴표 안의 내용을 변경하시면 페이지에 바로 반영됩니다!
-// 포스터 이미지는 온라인에 등록된 이미지 주소(http...)를 복사해서 붙여넣으시면 됩니다.
 const MOVIE_DATA = {
   current: {
     titleKo: "화양연화",
@@ -33,7 +31,8 @@ const MOVIE_DATA = {
 };
 
 // --- Firebase 초기화 ---
-const firebaseConfig = {
+// 사장님의 고유 설정값입니다. (외부 배포 시 사용됨)
+const myFirebaseConfig = {
   apiKey: "AIzaSyDGKJb-gJEmycHUkywHXkLjQKS2S7EMhrI",
   authDomain: "yeonsinnema.firebaseapp.com",
   projectId: "yeonsinnema",
@@ -41,6 +40,12 @@ const firebaseConfig = {
   messagingSenderId: "319341297163",
   appId: "1:319341297163:web:352e2ce03b19b643e0d10e"
 };
+
+// 미리보기(Canvas) 환경과 사장님의 실제 배포 환경을 자동 구분합니다.
+const firebaseConfig = typeof __firebase_config !== 'undefined' && __firebase_config 
+  ? JSON.parse(__firebase_config) 
+  : myFirebaseConfig;
+
 const app = Object.keys(firebaseConfig).length > 0 ? initializeApp(firebaseConfig) : null;
 const auth = app ? getAuth(app) : null;
 const db = app ? getFirestore(app) : null;
@@ -56,6 +61,12 @@ export default function App() {
   const [attendance, setAttendance] = useState([]);
   const [profiles, setProfiles] = useState([]); // 관리자용 회원 목록
   
+  // 실시간 채팅 상태
+  const [chatMessages, setChatMessages] = useState([]);
+  const [isChatOpen, setIsChatOpen] = useState(false);
+  const [newChatMessage, setNewChatMessage] = useState('');
+  const messagesEndRef = useRef(null);
+  
   // 입력 폼 상태
   const [authMode, setAuthMode] = useState('login'); // 'login' or 'register'
   const [phoneInput, setPhoneInput] = useState('');
@@ -68,7 +79,7 @@ export default function App() {
   const [isAdminMode, setIsAdminMode] = useState(false);
   const [showAdminModal, setShowAdminModal] = useState(false);
   const [adminPinInput, setAdminPinInput] = useState('');
-  const ADMIN_PIN = "1423"; // 사장님 전용 관리자 비밀번호 (원하시는 번호 4자리로 변경하세요!)
+  const ADMIN_PIN = "1423"; // 사장님 전용 관리자 비밀번호
 
   // 1. Firebase Auth 및 자동 로그인 설정
   useEffect(() => {
@@ -76,13 +87,17 @@ export default function App() {
     
     const initAuth = async () => {
       try {
-        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+        // 미리보기 환경일 때만 시스템에서 제공하는 커스텀 토큰 사용
+        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token && firebaseConfig !== myFirebaseConfig) {
           await signInWithCustomToken(auth, __initial_auth_token);
         } else {
+          // 실제 사장님 Firebase (Netlify 등 배포 환경)에서는 익명 로그인 사용
           await signInAnonymously(auth);
         }
       } catch (error) {
         console.error("Auth Error:", error);
+        // 에러 발생 시 익명 로그인으로 폴백 시도
+        try { await signInAnonymously(auth); } catch(e) { console.error("Fallback Auth Error:", e); }
       }
     };
     initAuth();
@@ -131,9 +146,18 @@ export default function App() {
       setAttendance(loadedAttendance);
     }, (error) => console.error("Attendance error:", error));
 
+    // 실시간 채팅 불러오기
+    const chatRef = collection(db, 'artifacts', appId, 'public', 'data', 'chatMessages');
+    const unsubChat = onSnapshot(chatRef, (snapshot) => {
+      const loadedChat = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      loadedChat.sort((a, b) => a.timestamp - b.timestamp); // 과거순 정렬 (아래로 추가)
+      setChatMessages(loadedChat);
+    });
+
     return () => {
       unsubComments();
       unsubAttendance();
+      unsubChat();
     };
   }, [user, appUser]);
 
@@ -148,6 +172,13 @@ export default function App() {
     });
     return () => unsubProfiles();
   }, [user, isAdminMode, db]);
+
+  // 4. 채팅창 자동 스크롤
+  useEffect(() => {
+    if (isChatOpen) {
+      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [chatMessages, isChatOpen]);
 
 
   // --- 인증 관련 함수 ---
@@ -199,6 +230,7 @@ export default function App() {
     setPhoneInput('');
     setNicknameInput('');
     setIsAdminMode(false);
+    setIsChatOpen(false);
     localStorage.removeItem('yeonsinnema_phone');
   };
 
@@ -224,8 +256,24 @@ export default function App() {
     }
   };
 
+  // --- 기능 관련 함수 (채팅 추가) ---
+  const sendChatMessage = async (e) => {
+    e.preventDefault();
+    if (!newChatMessage.trim() || !user || !db) return;
+    try {
+      const chatRef = collection(db, 'artifacts', appId, 'public', 'data', 'chatMessages');
+      await addDoc(chatRef, {
+        nickname: appUser.nickname,
+        phone: appUser.phone,
+        text: newChatMessage,
+        timestamp: Date.now()
+      });
+      setNewChatMessage('');
+    } catch (error) {
+      console.error("Chat send error:", error);
+    }
+  };
 
-  // --- 기능 관련 함수 ---
   const submitComment = async (e) => {
     e.preventDefault();
     if (!newComment.trim() || !user || !db) return;
@@ -789,8 +837,8 @@ export default function App() {
 
       </main>
       
-      {/* 푸터 */}
-      <footer className="border-t border-[#144950] py-10 text-center bg-[#010a0b] relative">
+      {/* 푸터 (채팅버튼 공간을 위해 pb-24 추가) */}
+      <footer className="border-t border-[#144950] py-10 text-center bg-[#010a0b] pb-24 relative">
         <Clapperboard className="w-6 h-6 text-[#144950] mx-auto mb-4" />
         <p className="text-xs text-[#d4af37] opacity-40 uppercase tracking-widest font-mono">Yeonsinnema Private Club</p>
         <div className="flex items-center justify-center gap-2 mt-2 text-gray-600">
@@ -801,6 +849,81 @@ export default function App() {
         </div>
       </footer>
 
+      {/* 플로팅 채팅 버튼 (추가됨) */}
+      <button
+        onClick={() => setIsChatOpen(!isChatOpen)}
+        className="fixed bottom-6 right-6 w-14 h-14 bg-gradient-to-br from-[#f4d473] to-[#aa801e] rounded-full shadow-[0_10px_30px_rgba(212,175,55,0.4)] flex items-center justify-center text-[#011214] hover:scale-110 transition-transform z-40 border border-[#fbf5b7]"
+      >
+        {isChatOpen ? <X className="w-6 h-6" /> : <MessageCircle className="w-6 h-6" />}
+      </button>
+
+      {/* 라이브 채팅 슬라이드 패널 (추가됨) */}
+      {isChatOpen && (
+        <div className="fixed bottom-24 right-4 md:right-6 w-[calc(100%-2rem)] md:w-96 bg-gradient-to-b from-[#03252a] to-[#011619] rounded-3xl shadow-[0_20px_50px_rgba(0,0,0,0.8)] border border-[#d4af37] border-opacity-40 z-50 overflow-hidden flex flex-col h-[500px] max-h-[70vh] animate-in slide-in-from-bottom-10 fade-in duration-300">
+          {/* 채팅방 헤더 */}
+          <div className="p-4 bg-[#021a1d] border-b border-[#144950] flex justify-between items-center shadow-md">
+            <h3 className="text-[#fbf5b7] font-bold flex items-center gap-2 text-sm tracking-widest">
+              <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
+              LIVE CHAT
+            </h3>
+            <span className="text-xs text-[#d4af37] opacity-60">연신네마 라운지</span>
+          </div>
+
+          {/* 대화창 영역 */}
+          <div className="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar">
+            {chatMessages.length === 0 ? (
+              <p className="text-center text-gray-500 text-xs mt-10">채팅방이 조용합니다. 첫 인사를 건네보세요!</p>
+            ) : (
+              chatMessages.map((msg) => {
+                const isMe = msg.phone === appUser.phone;
+                return (
+                  <div key={msg.id} className={`flex flex-col ${isMe ? 'items-end' : 'items-start'}`}>
+                    {!isMe && <span className="text-[10px] text-gray-400 mb-1 ml-1 font-bold">{msg.nickname}</span>}
+                    <div className={`px-4 py-2.5 max-w-[80%] text-sm shadow-md ${
+                      isMe 
+                      ? 'bg-gradient-to-r from-[#e5c158] to-[#d4af37] text-[#011214] rounded-2xl rounded-tr-sm font-medium' 
+                      : 'bg-[#021e22] text-gray-200 border border-[#144950] rounded-2xl rounded-tl-sm'
+                    }`}>
+                      {msg.text}
+                    </div>
+                    <span className="text-[9px] text-gray-600 mt-1 mx-1">
+                      {new Date(msg.timestamp).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })}
+                    </span>
+                  </div>
+                );
+              })
+            )}
+            <div ref={messagesEndRef} />
+          </div>
+
+          {/* 채팅 입력 영역 */}
+          <div className="p-3 bg-[#011214] border-t border-[#144950]">
+            <form onSubmit={sendChatMessage} className="flex gap-2">
+              <input
+                type="text"
+                value={newChatMessage}
+                onChange={(e) => setNewChatMessage(e.target.value)}
+                placeholder="메시지를 입력하세요..."
+                className="flex-1 bg-[#021a1d] text-gray-200 px-4 py-2.5 rounded-full border border-[#144950] focus:outline-none focus:border-[#d4af37] text-sm shadow-inner placeholder-gray-600"
+              />
+              <button
+                type="submit"
+                disabled={!newChatMessage.trim()}
+                className="w-10 h-10 rounded-full bg-[#d4af37] text-[#011214] flex items-center justify-center hover:bg-[#fbf5b7] transition-colors disabled:opacity-50 disabled:cursor-not-allowed shadow-md flex-shrink-0"
+              >
+                <Send className="w-4 h-4 ml-0.5" />
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      <style jsx="true">{`
+        .custom-scrollbar::-webkit-scrollbar { width: 5px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #144950; border-radius: 10px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #d4af37; }
+      `}</style>
     </div>
   );
 }
