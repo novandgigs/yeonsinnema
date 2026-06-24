@@ -4,6 +4,10 @@ import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'firebase/auth';
 import { getFirestore, collection, doc, setDoc, getDoc, onSnapshot, addDoc, deleteDoc } from 'firebase/firestore';
 
+// --- 차단할 전화번호 목록 (블랙리스트) ---
+// 사장님, 가입이나 로그인을 막고 싶은 번호 뒷 4자리를 이곳에 쉼표로 구분해서 적어주세요.
+const BLOCKED_NUMBERS = ["9999", "0000", "1234"]; 
+
 // --- 관리자 설정 (영화 정보 및 포스터 변경) ---
 const MOVIE_DATA = {
   current: {
@@ -15,7 +19,7 @@ const MOVIE_DATA = {
     quote: "가장 아름답고 찬란했던 시절, 그들의 비밀스러운 로맨스",
     date: "2026년 6월 29일 (월) 오후 7:30",
     location: "연신내 아지트",
-    posterUrl: "https://media.themoviedb.org/t/p/w220_and_h330_face/yCKaf65zoySg2iJdsews4Rafl7C.jpg" // 현재 상영작 포스터 링크
+    posterUrl: "https://media.themoviedb.org/t/p/w220_and_h330_face/yCKaf65zoySg2iJdsews4Rafl7C.jpg"
   },
   next: {
     titleKo: "그 시절, 우리가 사랑했던 소녀",
@@ -26,12 +30,11 @@ const MOVIE_DATA = {
     quote: "그 시절, 우리가 사랑했던 소녀",
     date: "2026년 7월 6일 (수) 오후 7:30",
     location: "연신내 아지트",
-    posterUrl: "https://media.themoviedb.org/t/p/w300_and_h450_face/ynLYtNB3AOiDX4Ltr1uMea8oNHM.jpg" // 다음 상영작 포스터 링크
+    posterUrl: "https://media.themoviedb.org/t/p/w300_and_h450_face/ynLYtNB3AOiDX4Ltr1uMea8oNHM.jpg"
   }
 };
 
 // --- Firebase 초기화 ---
-// 사장님의 고유 설정값입니다. (외부 배포 시 사용됨)
 const myFirebaseConfig = {
   apiKey: "AIzaSyDGKJb-gJEmycHUkywHXkLjQKS2S7EMhrI",
   authDomain: "yeonsinnema.firebaseapp.com",
@@ -41,7 +44,6 @@ const myFirebaseConfig = {
   appId: "1:319341297163:web:352e2ce03b19b643e0d10e"
 };
 
-// 미리보기(Canvas) 환경과 사장님의 실제 배포 환경을 자동 구분합니다.
 const firebaseConfig = typeof __firebase_config !== 'undefined' && __firebase_config 
   ? JSON.parse(__firebase_config) 
   : myFirebaseConfig;
@@ -51,53 +53,65 @@ const auth = app ? getAuth(app) : null;
 const db = app ? getFirestore(app) : null;
 const appId = typeof __app_id !== 'undefined' ? __app_id : 'yeonsinnema-app';
 
+// --- 티어(등급) 계산 도우미 함수 ---
+const getTierInfo = (count) => {
+  if (count >= 51) return { name: '다이아몬드', style: 'bg-gradient-to-r from-cyan-900 to-blue-900 text-cyan-300 border-cyan-400 shadow-[0_0_12px_rgba(34,211,238,0.6)] font-black' };
+  if (count >= 21) return { name: '블랙티켓', style: 'bg-black text-white border-gray-600 shadow-[0_1px_5px_rgba(255,255,255,0.2)] font-bold' };
+  if (count >= 11) return { name: '골드티켓', style: 'bg-yellow-900/40 text-[#d4af37] border-[#d4af37] shadow-[0_0_8px_rgba(212,175,55,0.4)] font-bold' };
+  if (count >= 6) return { name: '실버티켓', style: 'bg-gray-800 text-gray-300 border-gray-500 font-semibold' };
+  if (count >= 2) return { name: '블루티켓', style: 'bg-blue-900/40 text-blue-400 border-blue-700/50' };
+  return { name: '그린티켓', style: 'bg-green-900/40 text-green-400 border-green-700/50' };
+};
+
+// 티어 배지 컴포넌트
+const TierBadge = ({ count }) => {
+  const tier = getTierInfo(count || 0);
+  return (
+    <span className={`text-[9px] px-1.5 py-0.5 rounded border ${tier.style} whitespace-nowrap tracking-wider`}>
+      {tier.name}
+    </span>
+  );
+};
+
 export default function App() {
   const [user, setUser] = useState(null);
-  const [appUser, setAppUser] = useState(null); // { nickname, phone }
+  const [appUser, setAppUser] = useState(null); // { nickname, phone, attendanceCount }
   const [isAuthLoading, setIsAuthLoading] = useState(true);
   
-  // 데이터 상태
   const [comments, setComments] = useState([]);
   const [attendance, setAttendance] = useState([]);
-  const [profiles, setProfiles] = useState([]); // 관리자용 회원 목록
+  const [profiles, setProfiles] = useState([]); 
   
-  // 실시간 채팅 상태
   const [chatMessages, setChatMessages] = useState([]);
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [newChatMessage, setNewChatMessage] = useState('');
   const messagesEndRef = useRef(null);
   
-  // 입력 폼 상태
-  const [authMode, setAuthMode] = useState('login'); // 'login' or 'register'
+  const [authMode, setAuthMode] = useState('login'); 
   const [phoneInput, setPhoneInput] = useState('');
   const [nicknameInput, setNicknameInput] = useState('');
   const [newComment, setNewComment] = useState('');
   const [rating, setRating] = useState(5);
   const [authError, setAuthError] = useState('');
 
-  // 관리자 모드 상태
   const [isAdminMode, setIsAdminMode] = useState(false);
   const [showAdminModal, setShowAdminModal] = useState(false);
   const [adminPinInput, setAdminPinInput] = useState('');
-  const ADMIN_PIN = "1423"; // 사장님 전용 관리자 비밀번호
+  const ADMIN_PIN = "1423"; 
 
   // 1. Firebase Auth 및 자동 로그인 설정
   useEffect(() => {
     if (!auth) return;
-    
     const initAuth = async () => {
       try {
-        // 미리보기 환경일 때만 시스템에서 제공하는 커스텀 토큰 사용
         if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token && firebaseConfig !== myFirebaseConfig) {
           await signInWithCustomToken(auth, __initial_auth_token);
         } else {
-          // 실제 사장님 Firebase (Netlify 등 배포 환경)에서는 익명 로그인 사용
           await signInAnonymously(auth);
         }
       } catch (error) {
         console.error("Auth Error:", error);
-        // 에러 발생 시 익명 로그인으로 폴백 시도
-        try { await signInAnonymously(auth); } catch(e) { console.error("Fallback Auth Error:", e); }
+        try { await signInAnonymously(auth); } catch(e) {}
       }
     };
     initAuth();
@@ -105,7 +119,6 @@ export default function App() {
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       setUser(currentUser);
       if (currentUser && db) {
-        // 로컬 스토리지에서 전화번호(4자리)를 확인하여 자동 로그인
         const savedPhone = localStorage.getItem('yeonsinnema_phone');
         if (savedPhone) {
           try {
@@ -116,9 +129,7 @@ export default function App() {
             } else {
               localStorage.removeItem('yeonsinnema_phone');
             }
-          } catch (e) {
-            console.error("Auto login error:", e);
-          }
+          } catch (e) {}
         }
       }
       setIsAuthLoading(false);
@@ -126,31 +137,47 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  // 2. 실시간 데이터 불러오기 (Firestore)
+  // 1-2. 현재 로그인된 회원의 정보를 실시간으로 감시 (강제삭제 대비 및 등급 즉시 반영)
+  useEffect(() => {
+    if (!db || !appUser?.phone) return;
+    const userRef = doc(db, 'artifacts', appId, 'public', 'data', 'profiles', appUser.phone);
+    const unsub = onSnapshot(userRef, (docSnap) => {
+      if (docSnap.exists()) {
+        setAppUser(prev => ({ ...prev, ...docSnap.data() }));
+      } else {
+        // 관리자가 회원을 삭제한 경우 즉시 로그아웃 처리
+        setAppUser(null);
+        localStorage.removeItem('yeonsinnema_phone');
+        setIsAdminMode(false);
+        setIsChatOpen(false);
+        alert('관리자에 의해 계정이 삭제되어 로그아웃되었습니다.'); // 강제 아웃 알림
+      }
+    });
+    return () => unsub();
+  }, [db, appUser?.phone]);
+
+  // 2. 실시간 데이터 불러오기
   useEffect(() => {
     if (!user || !db || !appUser) return;
 
-    // 감상평 불러오기
     const commentsRef = collection(db, 'artifacts', appId, 'public', 'data', 'comments');
     const unsubComments = onSnapshot(commentsRef, (snapshot) => {
       const loadedComments = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      loadedComments.sort((a, b) => b.timestamp - a.timestamp); // 최신순 정렬
+      loadedComments.sort((a, b) => b.timestamp - a.timestamp); 
       setComments(loadedComments);
-    }, (error) => console.error("Comments error:", error));
+    });
 
-    // 출석부 불러오기
     const attendanceRef = collection(db, 'artifacts', appId, 'public', 'data', 'attendance');
     const unsubAttendance = onSnapshot(attendanceRef, (snapshot) => {
       const loadedAttendance = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       loadedAttendance.sort((a, b) => b.timestamp - a.timestamp);
       setAttendance(loadedAttendance);
-    }, (error) => console.error("Attendance error:", error));
+    });
 
-    // 실시간 채팅 불러오기
     const chatRef = collection(db, 'artifacts', appId, 'public', 'data', 'chatMessages');
     const unsubChat = onSnapshot(chatRef, (snapshot) => {
       const loadedChat = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      loadedChat.sort((a, b) => a.timestamp - b.timestamp); // 과거순 정렬 (아래로 추가)
+      loadedChat.sort((a, b) => a.timestamp - b.timestamp); 
       setChatMessages(loadedChat);
     });
 
@@ -161,7 +188,7 @@ export default function App() {
     };
   }, [user, appUser]);
 
-  // 3. 관리자용 데이터 불러오기 (회원 목록 실시간)
+  // 3. 관리자용 데이터 불러오기
   useEffect(() => {
     if (!user || !db || !isAdminMode) return;
     const profilesRef = collection(db, 'artifacts', appId, 'public', 'data', 'profiles');
@@ -173,7 +200,7 @@ export default function App() {
     return () => unsubProfiles();
   }, [user, isAdminMode, db]);
 
-  // 4. 채팅창 자동 스크롤
+  // 채팅창 자동 스크롤
   useEffect(() => {
     if (isChatOpen) {
       messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -186,6 +213,13 @@ export default function App() {
     e.preventDefault();
     setAuthError('');
     if (!user || !db) return;
+    
+    // 차단된 번호인지 검사
+    if (BLOCKED_NUMBERS.includes(phoneInput)) {
+      setAuthError('해당 번호는 서비스 이용이 영구 제한되었습니다.');
+      return;
+    }
+
     if (phoneInput.length !== 4) {
       setAuthError('전화번호 뒷 4자리를 정확히 입력해주세요.');
       return;
@@ -197,8 +231,7 @@ export default function App() {
       if (authMode === 'login') {
         const profileSnap = await getDoc(profileRef);
         if (profileSnap.exists()) {
-          const userData = profileSnap.data();
-          setAppUser(userData);
+          setAppUser(profileSnap.data());
           localStorage.setItem('yeonsinnema_phone', phoneInput);
         } else {
           setAuthError('등록되지 않은 번호입니다. 신규 가입을 진행해주세요.');
@@ -214,13 +247,13 @@ export default function App() {
           return;
         }
         
-        const userInfo = { nickname: nicknameInput, phone: phoneInput, uid: user.uid, createdAt: Date.now() };
+        // 신규 가입시 출석 횟수(attendanceCount) 0으로 초기화
+        const userInfo = { nickname: nicknameInput, phone: phoneInput, uid: user.uid, createdAt: Date.now(), attendanceCount: 0 };
         await setDoc(profileRef, userInfo);
         setAppUser(userInfo);
         localStorage.setItem('yeonsinnema_phone', phoneInput);
       }
     } catch (error) {
-      console.error("Auth process error:", error);
       setAuthError('오류가 발생했습니다. 잠시 후 다시 시도해주세요.');
     }
   };
@@ -247,16 +280,38 @@ export default function App() {
     }
   };
 
+  // 회원 삭제 함수 (추가됨)
+  const adminDeleteProfile = async (phone) => {
+    if (!user || !db) return;
+    if (window.confirm(`정말로 이 회원(*${phone})을 영구 삭제하시겠습니까?\n삭제된 회원은 즉시 앱에서 쫓겨납니다.`)) {
+      try {
+        await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'profiles', phone));
+      } catch (error) {
+        console.error("Delete profile error:", error);
+      }
+    }
+  };
+
+  // 회원 참석 횟수 수정 함수 (추가됨)
+  const adminUpdateAttendanceCount = async (phone, currentCount, delta) => {
+    if (!user || !db) return;
+    const newCount = Math.max(0, (currentCount || 0) + delta);
+    try {
+      await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'profiles', phone), { attendanceCount: newCount }, { merge: true });
+    } catch (error) {
+      console.error("Update attendance count error:", error);
+    }
+  };
+
   const adminDeleteComment = async (commentId) => {
     if (!user || !db) return;
     try {
       await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'comments', commentId));
-    } catch (error) {
-      console.error("Delete comment error:", error);
-    }
+    } catch (error) {}
   };
 
-  // --- 기능 관련 함수 (채팅 추가) ---
+
+  // --- 기능 관련 함수 ---
   const sendChatMessage = async (e) => {
     e.preventDefault();
     if (!newChatMessage.trim() || !user || !db) return;
@@ -266,12 +321,11 @@ export default function App() {
         nickname: appUser.nickname,
         phone: appUser.phone,
         text: newChatMessage,
+        attendanceCount: appUser.attendanceCount || 0, // 채팅 시점의 등급 기록
         timestamp: Date.now()
       });
       setNewChatMessage('');
-    } catch (error) {
-      console.error("Chat send error:", error);
-    }
+    } catch (error) {}
   };
 
   const submitComment = async (e) => {
@@ -284,13 +338,12 @@ export default function App() {
         phone: appUser.phone,
         text: newComment,
         rating: rating,
+        attendanceCount: appUser.attendanceCount || 0, // 감상평 작성 시점의 등급 기록
         timestamp: Date.now()
       });
       setNewComment('');
       setRating(5);
-    } catch (error) {
-      console.error("Comment submit error:", error);
-    }
+    } catch (error) {}
   };
 
   const deleteComment = async (commentId) => {
@@ -298,9 +351,7 @@ export default function App() {
     if (window.confirm('감상평을 삭제하시겠습니까?')) {
       try {
         await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'comments', commentId));
-      } catch (error) {
-        console.error("Delete comment error:", error);
-      }
+      } catch (error) {}
     }
   };
 
@@ -311,12 +362,11 @@ export default function App() {
       await setDoc(attendanceRef, {
         nickname: appUser.nickname,
         phone: appUser.phone,
-        status: status, // 'going' or 'not_going'
+        status: status, 
+        attendanceCount: appUser.attendanceCount || 0, // 출석체크 시점의 등급
         timestamp: Date.now()
       });
-    } catch (error) {
-      console.error("Attendance error:", error);
-    }
+    } catch (error) {}
   };
 
   const myAttendance = attendance.find(a => a.phone === appUser?.phone);
@@ -366,26 +416,45 @@ export default function App() {
         </div>
 
         <div className="grid grid-cols-1 xl:grid-cols-2 gap-8">
-          {/* 회원 목록 */}
+          {/* 회원 목록 및 관리 */}
           <div className="bg-gradient-to-br from-[#03252a] to-[#011619] p-6 md:p-8 rounded-3xl border border-[#144950] shadow-lg">
             <h2 className="text-xl font-bold text-[#fbf5b7] mb-6 flex items-center gap-2 border-b border-[#144950] pb-4">
-              <Users className="w-6 h-6 text-[#d4af37]" /> 가입 회원 명단
+              <Users className="w-6 h-6 text-[#d4af37]" /> 가입 회원 전체 관리
             </h2>
             <div className="space-y-3 max-h-[500px] overflow-y-auto pr-2 custom-scrollbar">
               {profiles.length === 0 ? <p className="text-gray-500 text-center py-10">가입한 회원이 없습니다.</p> : profiles.map(profile => (
-                <div key={profile.phone} className="flex justify-between items-center bg-[#011214] p-4 rounded-2xl border border-[#144950] hover:border-[#d4af37] transition-colors">
+                <div key={profile.phone} className="flex flex-col sm:flex-row sm:justify-between items-start sm:items-center bg-[#011214] p-4 rounded-2xl border border-[#144950] hover:border-[#d4af37] transition-colors gap-4">
                   <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-full bg-[#021e22] flex items-center justify-center text-[#d4af37] font-black border border-[#144950]">
+                    <div className="w-10 h-10 rounded-full bg-[#021e22] flex items-center justify-center text-[#d4af37] font-black border border-[#144950] flex-shrink-0">
                        {profile.nickname.substring(0,1)}
                     </div>
                     <div>
-                      <span className="font-bold text-gray-200 block">{profile.nickname}</span>
+                      <div className="flex items-center gap-2 mb-0.5">
+                        <span className="font-bold text-gray-200">{profile.nickname}</span>
+                        <TierBadge count={profile.attendanceCount} />
+                      </div>
                       <span className="text-xs text-[#d4af37] font-mono tracking-widest">*{profile.phone}</span>
                     </div>
                   </div>
-                  <span className="text-xs text-gray-500 bg-[#021e22] px-3 py-1.5 rounded-full">
-                    {new Date(profile.createdAt).toLocaleDateString()} 가입
-                  </span>
+                  
+                  {/* 등급 조작 및 회원 삭제 */}
+                  <div className="flex items-center gap-3 w-full sm:w-auto justify-end">
+                    <div className="flex items-center bg-[#021e22] rounded-lg border border-[#144950] p-1 shadow-inner">
+                      <button onClick={() => adminUpdateAttendanceCount(profile.phone, profile.attendanceCount, -1)} className="px-2.5 text-gray-400 hover:text-red-400 text-lg font-bold transition-colors">-</button>
+                      <div className="flex flex-col items-center justify-center w-8">
+                        <span className="text-[9px] text-gray-500 mb-[-4px]">참석</span>
+                        <span className="text-sm font-bold text-[#d4af37]">{profile.attendanceCount || 0}</span>
+                      </div>
+                      <button onClick={() => adminUpdateAttendanceCount(profile.phone, profile.attendanceCount, 1)} className="px-2.5 text-gray-400 hover:text-green-400 text-lg font-bold transition-colors">+</button>
+                    </div>
+                    <button 
+                      onClick={() => adminDeleteProfile(profile.phone)} 
+                      className="p-2.5 bg-red-900/20 text-red-400 rounded-lg hover:bg-red-900 hover:text-white transition-colors border border-transparent hover:border-red-500"
+                      title="회원 영구 삭제"
+                    >
+                      <Trash2 className="w-5 h-5" />
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
@@ -400,18 +469,19 @@ export default function App() {
               {comments.length === 0 ? <p className="text-gray-500 text-center py-10">등록된 감상평이 없습니다.</p> : comments.map(comment => (
                 <div key={comment.id} className="bg-[#011214] p-5 rounded-2xl border border-[#144950] relative group">
                   <div className="flex justify-between mb-3">
-                     <div className="flex items-center gap-2">
+                     <div className="flex items-center gap-2 flex-wrap">
                        <span className="font-bold text-[#fbf5b7]">{comment.nickname}</span>
+                       <TierBadge count={comment.attendanceCount} />
                        <span className="text-xs text-gray-500 font-mono">(*{comment.phone})</span>
                      </div>
-                     <div className="flex gap-0.5">
+                     <div className="flex gap-0.5 ml-2">
                        {[1,2,3,4,5].map(s => <Star key={s} className={`w-3.5 h-3.5 ${comment.rating >= s ? 'text-[#d4af37] fill-[#d4af37]' : 'text-[#144950]'}`} />)}
                      </div>
                   </div>
                   <p className="text-sm text-gray-300 whitespace-pre-wrap pr-10">{comment.text}</p>
                   <button 
                     onClick={() => adminDeleteComment(comment.id)}
-                    className="absolute right-4 bottom-4 p-2.5 bg-red-900 bg-opacity-20 text-red-400 rounded-xl hover:bg-red-900 hover:text-white transition-all border border-transparent hover:border-red-500"
+                    className="absolute right-4 bottom-4 p-2 bg-red-900 bg-opacity-20 text-red-400 rounded-lg hover:bg-red-900 hover:text-white transition-all border border-transparent hover:border-red-500"
                     title="댓글 즉시 삭제"
                   >
                     <Trash2 className="w-4 h-4" />
@@ -556,7 +626,10 @@ export default function App() {
           <div className="flex items-center gap-4">
             <div className="flex items-center gap-2 bg-[#021e22] px-3 py-1.5 rounded-full border border-[#144950] shadow-inner">
               <div className="w-2 h-2 rounded-full bg-[#d4af37] animate-pulse shadow-[0_0_8px_#d4af37]"></div>
-              <span className="text-xs font-medium text-gray-300"><strong className="text-transparent bg-clip-text bg-gradient-to-r from-[#fbf5b7] to-[#d4af37]">{appUser.nickname}</strong> 님</span>
+              <span className="text-xs font-medium text-gray-300 flex items-center gap-1.5">
+                <strong className="text-transparent bg-clip-text bg-gradient-to-r from-[#fbf5b7] to-[#d4af37]">{appUser.nickname}</strong>
+                <TierBadge count={appUser.attendanceCount} />
+              </span>
             </div>
             <button onClick={handleLogout} className="text-gray-500 hover:text-[#d4af37] transition-colors p-1" title="로그아웃">
               <LogOut className="w-5 h-5" />
@@ -690,11 +763,12 @@ export default function App() {
               
               <div className="flex flex-wrap gap-2.5">
                 {attendance.filter(a => a.status === 'going').map((attendee) => (
-                  <div key={attendee.id} className="bg-[#011214] border border-[#d4af37] border-opacity-40 pl-1 pr-4 py-1.5 rounded-full flex items-center gap-2.5 shadow-[0_2px_10px_rgba(0,0,0,0.5)] animate-in fade-in zoom-in duration-300">
+                  <div key={attendee.id} className="bg-[#011214] border border-[#d4af37] border-opacity-40 pl-1 pr-3 py-1.5 rounded-full flex items-center gap-2 shadow-[0_2px_10px_rgba(0,0,0,0.5)] animate-in fade-in zoom-in duration-300">
                     <div className="w-8 h-8 rounded-full bg-gradient-to-br from-[#fbf5b7] via-[#d4af37] to-[#9c7e1c] flex items-center justify-center flex-shrink-0 shadow-[inset_0_-2px_4px_rgba(0,0,0,0.3)]">
                       <span className="text-[#011214] font-black text-xs">{attendee.nickname.substring(0,1)}</span>
                     </div>
-                    <span className="text-gray-100 font-medium text-sm tracking-wide">{attendee.nickname}</span>
+                    <span className="text-gray-100 font-medium text-sm tracking-wide mr-1">{attendee.nickname}</span>
+                    <TierBadge count={attendee.attendanceCount} />
                   </div>
                 ))}
                 {attendance.filter(a => a.status === 'going').length === 0 && (
@@ -768,7 +842,10 @@ export default function App() {
                         <div className="w-9 h-9 rounded-full bg-[#011214] border border-[#d4af37] border-opacity-70 flex items-center justify-center shadow-inner">
                            <span className="text-transparent bg-clip-text bg-gradient-to-b from-[#fbf5b7] to-[#d4af37] font-black text-sm">{comment.nickname.substring(0,1)}</span>
                         </div>
-                        <span className="font-bold text-gray-100 tracking-wide">{comment.nickname}</span>
+                        <div className="flex flex-col items-start gap-1">
+                          <span className="font-bold text-gray-100 tracking-wide">{comment.nickname}</span>
+                          <TierBadge count={comment.attendanceCount} />
+                        </div>
                       </div>
                       <div className="flex gap-0.5 bg-[#011214] px-2.5 py-1.5 rounded-full border border-[#144950] shadow-inner">
                         {[1, 2, 3, 4, 5].map(star => (
@@ -849,7 +926,7 @@ export default function App() {
         </div>
       </footer>
 
-      {/* 플로팅 채팅 버튼 (추가됨) */}
+      {/* 플로팅 채팅 버튼 */}
       <button
         onClick={() => setIsChatOpen(!isChatOpen)}
         className="fixed bottom-6 right-6 w-14 h-14 bg-gradient-to-br from-[#f4d473] to-[#aa801e] rounded-full shadow-[0_10px_30px_rgba(212,175,55,0.4)] flex items-center justify-center text-[#011214] hover:scale-110 transition-transform z-40 border border-[#fbf5b7]"
@@ -857,10 +934,9 @@ export default function App() {
         {isChatOpen ? <X className="w-6 h-6" /> : <MessageCircle className="w-6 h-6" />}
       </button>
 
-      {/* 라이브 채팅 슬라이드 패널 (추가됨) */}
+      {/* 라이브 채팅 슬라이드 패널 */}
       {isChatOpen && (
         <div className="fixed bottom-24 right-4 md:right-6 w-[calc(100%-2rem)] md:w-96 bg-gradient-to-b from-[#03252a] to-[#011619] rounded-3xl shadow-[0_20px_50px_rgba(0,0,0,0.8)] border border-[#d4af37] border-opacity-40 z-50 overflow-hidden flex flex-col h-[500px] max-h-[70vh] animate-in slide-in-from-bottom-10 fade-in duration-300">
-          {/* 채팅방 헤더 */}
           <div className="p-4 bg-[#021a1d] border-b border-[#144950] flex justify-between items-center shadow-md">
             <h3 className="text-[#fbf5b7] font-bold flex items-center gap-2 text-sm tracking-widest">
               <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
@@ -878,7 +954,12 @@ export default function App() {
                 const isMe = msg.phone === appUser.phone;
                 return (
                   <div key={msg.id} className={`flex flex-col ${isMe ? 'items-end' : 'items-start'}`}>
-                    {!isMe && <span className="text-[10px] text-gray-400 mb-1 ml-1 font-bold">{msg.nickname}</span>}
+                    {!isMe && (
+                      <div className="flex items-center gap-1.5 mb-1 ml-1">
+                        <span className="text-[10px] text-gray-400 font-bold">{msg.nickname}</span>
+                        <TierBadge count={msg.attendanceCount} />
+                      </div>
+                    )}
                     <div className={`px-4 py-2.5 max-w-[80%] text-sm shadow-md ${
                       isMe 
                       ? 'bg-gradient-to-r from-[#e5c158] to-[#d4af37] text-[#011214] rounded-2xl rounded-tr-sm font-medium' 
