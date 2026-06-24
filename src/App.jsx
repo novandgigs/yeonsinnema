@@ -30,7 +30,7 @@ const MOVIE_DATA = {
 };
 
 // --- Firebase 초기화 ---
-const const firebaseConfig = {
+const firebaseConfig = {
   apiKey: "AIzaSyDGKJb-gJEmycHUkywHXkLjQKS2S7EMhrI",
   authDomain: "yeonsinnema.firebaseapp.com",
   projectId: "yeonsinnema",
