@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { MessageSquare, CalendarDays, Users, LogOut, Star, CheckCircle2, UserPlus, LogIn, Quote, Clapperboard } from 'lucide-react';
+import { MessageSquare, CalendarDays, Users, LogOut, Star, CheckCircle2, UserPlus, LogIn, Quote, Clapperboard, Settings, Lock, X, Trash2 } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'firebase/auth';
 import { getFirestore, collection, doc, setDoc, getDoc, onSnapshot, addDoc, deleteDoc } from 'firebase/firestore';
@@ -51,6 +51,7 @@ export default function App() {
   // 데이터 상태
   const [comments, setComments] = useState([]);
   const [attendance, setAttendance] = useState([]);
+  const [profiles, setProfiles] = useState([]); // 관리자용 회원 목록
   
   // 입력 폼 상태
   const [authMode, setAuthMode] = useState('login'); // 'login' or 'register'
@@ -59,6 +60,12 @@ export default function App() {
   const [newComment, setNewComment] = useState('');
   const [rating, setRating] = useState(5);
   const [authError, setAuthError] = useState('');
+
+  // 관리자 모드 상태
+  const [isAdminMode, setIsAdminMode] = useState(false);
+  const [showAdminModal, setShowAdminModal] = useState(false);
+  const [adminPinInput, setAdminPinInput] = useState('');
+  const ADMIN_PIN = "1423"; // 사장님 전용 관리자 비밀번호 (원하시는 번호 4자리로 변경하세요!)
 
   // 1. Firebase Auth 및 자동 로그인 설정
   useEffect(() => {
@@ -127,6 +134,19 @@ export default function App() {
     };
   }, [user, appUser]);
 
+  // 3. 관리자용 데이터 불러오기 (회원 목록 실시간)
+  useEffect(() => {
+    if (!user || !db || !isAdminMode) return;
+    const profilesRef = collection(db, 'artifacts', appId, 'public', 'data', 'profiles');
+    const unsubProfiles = onSnapshot(profilesRef, (snapshot) => {
+      const loadedProfiles = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      loadedProfiles.sort((a, b) => b.createdAt - a.createdAt);
+      setProfiles(loadedProfiles);
+    });
+    return () => unsubProfiles();
+  }, [user, isAdminMode, db]);
+
+
   // --- 인증 관련 함수 ---
   const handleAuthSubmit = async (e) => {
     e.preventDefault();
@@ -175,8 +195,32 @@ export default function App() {
     setAppUser(null);
     setPhoneInput('');
     setNicknameInput('');
+    setIsAdminMode(false);
     localStorage.removeItem('yeonsinnema_phone');
   };
+
+  // --- 관리자 모드 관련 함수 ---
+  const handleAdminLoginSubmit = (e) => {
+    e.preventDefault();
+    if (adminPinInput === ADMIN_PIN) {
+      setIsAdminMode(true);
+      setShowAdminModal(false);
+      setAdminPinInput('');
+      setAuthError('');
+    } else {
+      setAuthError('비밀번호가 일치하지 않습니다.');
+    }
+  };
+
+  const adminDeleteComment = async (commentId) => {
+    if (!user || !db) return;
+    try {
+      await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'comments', commentId));
+    } catch (error) {
+      console.error("Delete comment error:", error);
+    }
+  };
+
 
   // --- 기능 관련 함수 ---
   const submitComment = async (e) => {
@@ -228,9 +272,113 @@ export default function App() {
   const isGoing = myAttendance?.status === 'going';
 
   // --- 화면 렌더링 ---
-
   if (isAuthLoading) {
     return <div className="min-h-screen bg-[#011214] flex items-center justify-center text-[#d4af37] tracking-widest font-bold">로딩 중...</div>;
+  }
+
+  // --- 관리자 모드 화면 ---
+  if (appUser && isAdminMode) {
+    return (
+      <div className="min-h-screen bg-[#011214] text-gray-200 font-sans p-4 md:p-8 animate-in fade-in duration-500">
+        <header className="flex flex-col md:flex-row justify-between items-center gap-4 mb-8 bg-gradient-to-r from-[#021a1d] to-[#011214] p-6 rounded-3xl border border-[#d4af37] border-opacity-30 shadow-[0_10px_30px_rgba(0,0,0,0.5)]">
+          <h1 className="text-2xl md:text-3xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-[#fbf5b7] to-[#d4af37] flex items-center gap-3">
+            <Settings className="w-8 h-8 text-[#d4af37] animate-[spin_10s_linear_infinite]" /> 사장님 전용 대시보드
+          </h1>
+          <button onClick={() => setIsAdminMode(false)} className="px-6 py-3 bg-[#011214] border border-[#144950] text-[#d4af37] rounded-xl font-bold hover:bg-[#144950] hover:text-white transition-all shadow-inner">
+            라운지로 돌아가기
+          </button>
+        </header>
+
+        {/* 통계 요약 */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+          <div className="bg-gradient-to-br from-[#03252a] to-[#011619] p-6 rounded-3xl border border-[#144950] shadow-lg flex items-center justify-between">
+            <div>
+              <p className="text-gray-400 text-sm mb-1 font-bold tracking-widest">총 가입 회원</p>
+              <p className="text-4xl font-extrabold text-[#d4af37]">{profiles.length} <span className="text-lg text-gray-500">명</span></p>
+            </div>
+            <Users className="w-12 h-12 text-[#144950] opacity-50" />
+          </div>
+          <div className="bg-gradient-to-br from-[#03252a] to-[#011619] p-6 rounded-3xl border border-[#144950] shadow-lg flex items-center justify-between">
+            <div>
+              <p className="text-gray-400 text-sm mb-1 font-bold tracking-widest">이번 주 참석자</p>
+              <p className="text-4xl font-extrabold text-[#d4af37]">{attendance.filter(a => a.status === 'going').length} <span className="text-lg text-gray-500">명</span></p>
+            </div>
+            <CheckCircle2 className="w-12 h-12 text-[#144950] opacity-50" />
+          </div>
+          <div className="bg-gradient-to-br from-[#03252a] to-[#011619] p-6 rounded-3xl border border-[#144950] shadow-lg flex items-center justify-between">
+            <div>
+              <p className="text-gray-400 text-sm mb-1 font-bold tracking-widest">등록된 감상평</p>
+              <p className="text-4xl font-extrabold text-[#d4af37]">{comments.length} <span className="text-lg text-gray-500">개</span></p>
+            </div>
+            <MessageSquare className="w-12 h-12 text-[#144950] opacity-50" />
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-8">
+          {/* 회원 목록 */}
+          <div className="bg-gradient-to-br from-[#03252a] to-[#011619] p-6 md:p-8 rounded-3xl border border-[#144950] shadow-lg">
+            <h2 className="text-xl font-bold text-[#fbf5b7] mb-6 flex items-center gap-2 border-b border-[#144950] pb-4">
+              <Users className="w-6 h-6 text-[#d4af37]" /> 가입 회원 명단
+            </h2>
+            <div className="space-y-3 max-h-[500px] overflow-y-auto pr-2 custom-scrollbar">
+              {profiles.length === 0 ? <p className="text-gray-500 text-center py-10">가입한 회원이 없습니다.</p> : profiles.map(profile => (
+                <div key={profile.phone} className="flex justify-between items-center bg-[#011214] p-4 rounded-2xl border border-[#144950] hover:border-[#d4af37] transition-colors">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-full bg-[#021e22] flex items-center justify-center text-[#d4af37] font-black border border-[#144950]">
+                       {profile.nickname.substring(0,1)}
+                    </div>
+                    <div>
+                      <span className="font-bold text-gray-200 block">{profile.nickname}</span>
+                      <span className="text-xs text-[#d4af37] font-mono tracking-widest">*{profile.phone}</span>
+                    </div>
+                  </div>
+                  <span className="text-xs text-gray-500 bg-[#021e22] px-3 py-1.5 rounded-full">
+                    {new Date(profile.createdAt).toLocaleDateString()} 가입
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* 감상평 관리 */}
+          <div className="bg-gradient-to-br from-[#03252a] to-[#011619] p-6 md:p-8 rounded-3xl border border-[#144950] shadow-lg">
+            <h2 className="text-xl font-bold text-[#fbf5b7] mb-6 flex items-center gap-2 border-b border-[#144950] pb-4">
+              <MessageSquare className="w-6 h-6 text-[#d4af37]" /> 감상평 강제 삭제 관리
+            </h2>
+            <div className="space-y-4 max-h-[500px] overflow-y-auto pr-2 custom-scrollbar">
+              {comments.length === 0 ? <p className="text-gray-500 text-center py-10">등록된 감상평이 없습니다.</p> : comments.map(comment => (
+                <div key={comment.id} className="bg-[#011214] p-5 rounded-2xl border border-[#144950] relative group">
+                  <div className="flex justify-between mb-3">
+                     <div className="flex items-center gap-2">
+                       <span className="font-bold text-[#fbf5b7]">{comment.nickname}</span>
+                       <span className="text-xs text-gray-500 font-mono">(*{comment.phone})</span>
+                     </div>
+                     <div className="flex gap-0.5">
+                       {[1,2,3,4,5].map(s => <Star key={s} className={`w-3.5 h-3.5 ${comment.rating >= s ? 'text-[#d4af37] fill-[#d4af37]' : 'text-[#144950]'}`} />)}
+                     </div>
+                  </div>
+                  <p className="text-sm text-gray-300 whitespace-pre-wrap pr-10">{comment.text}</p>
+                  <button 
+                    onClick={() => adminDeleteComment(comment.id)}
+                    className="absolute right-4 bottom-4 p-2.5 bg-red-900 bg-opacity-20 text-red-400 rounded-xl hover:bg-red-900 hover:text-white transition-all border border-transparent hover:border-red-500"
+                    title="댓글 즉시 삭제"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+        
+        <style jsx="true">{`
+          .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+          .custom-scrollbar::-webkit-scrollbar-track { background: #011214; border-radius: 4px; }
+          .custom-scrollbar::-webkit-scrollbar-thumb { background: #144950; border-radius: 4px; }
+          .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #d4af37; }
+        `}</style>
+      </div>
+    );
   }
 
   // 로그인/회원가입 화면
@@ -312,8 +460,42 @@ export default function App() {
 
   // --- 메인 원페이지 앱 ---
   return (
-    <div className="min-h-screen bg-[#011214] text-gray-200 font-sans selection:bg-[#d4af37] selection:text-[#011214]">
+    <div className="min-h-screen bg-[#011214] text-gray-200 font-sans selection:bg-[#d4af37] selection:text-[#011214] relative">
       
+      {/* 관리자 로그인 모달 */}
+      {showAdminModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-80 backdrop-blur-sm z-[100] flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-gradient-to-b from-[#03252a] to-[#011214] p-8 rounded-3xl border border-[#d4af37] shadow-[0_0_40px_rgba(212,175,55,0.2)] w-full max-w-sm relative">
+            <button onClick={() => {setShowAdminModal(false); setAuthError('');}} className="absolute top-5 right-5 text-gray-500 hover:text-[#d4af37] transition-colors">
+              <X className="w-6 h-6" />
+            </button>
+            <div className="flex justify-center mb-6">
+              <div className="p-4 bg-[#011214] rounded-full border border-[#144950] shadow-inner">
+                <Lock className="w-8 h-8 text-[#d4af37]" />
+              </div>
+            </div>
+            <h3 className="text-xl font-bold text-center text-[#fbf5b7] mb-6 tracking-widest">관리자 접속</h3>
+            <form onSubmit={handleAdminLoginSubmit}>
+              <input
+                type="password"
+                value={adminPinInput}
+                onChange={(e) => setAdminPinInput(e.target.value)}
+                placeholder="비밀번호 4자리"
+                maxLength={4}
+                className="w-full px-4 py-4 rounded-xl bg-[#011214] text-center text-2xl tracking-[1em] text-[#d4af37] border border-[#144950] focus:border-[#d4af37] focus:outline-none focus:ring-1 focus:ring-[#d4af37] mb-2 shadow-inner"
+                autoFocus
+              />
+              <div className="h-6">
+                {authError && <p className="text-red-400 text-xs text-center">{authError}</p>}
+              </div>
+              <button type="submit" className="w-full mt-2 py-4 bg-gradient-to-r from-[#f4d473] to-[#aa801e] text-[#011214] font-bold rounded-xl hover:opacity-90 shadow-lg text-lg">
+                대시보드 열기
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* 고정 헤더 */}
       <header className="fixed top-0 w-full bg-[#011214] bg-opacity-80 backdrop-blur-lg z-50 border-b border-[#d4af37] border-opacity-10 shadow-[0_4px_30px_rgba(0,0,0,0.5)]">
         <div className="max-w-xl mx-auto px-5 py-4 flex justify-between items-center">
@@ -605,10 +787,15 @@ export default function App() {
       </main>
       
       {/* 푸터 */}
-      <footer className="border-t border-[#144950] py-10 text-center bg-[#010a0b]">
+      <footer className="border-t border-[#144950] py-10 text-center bg-[#010a0b] relative">
         <Clapperboard className="w-6 h-6 text-[#144950] mx-auto mb-4" />
         <p className="text-xs text-[#d4af37] opacity-40 uppercase tracking-widest font-mono">Yeonsinnema Private Club</p>
-        <p className="text-[10px] text-gray-600 mt-2">© 2026 Board Game Cafe. All rights reserved.</p>
+        <div className="flex items-center justify-center gap-2 mt-2 text-gray-600">
+          <p className="text-[10px]">© 2026 Board Game Cafe. All rights reserved.</p>
+          <button onClick={() => {setShowAdminModal(true); setAuthError('');}} className="p-1 hover:text-[#d4af37] transition-colors opacity-50 hover:opacity-100" title="관리자 모드 접속">
+            <Lock className="w-3 h-3" />
+          </button>
+        </div>
       </footer>
 
     </div>
