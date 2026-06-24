@@ -17,7 +17,7 @@ const MOVIE_DATA = {
     quote: "가장 아름답고 찬란했던 시절, 그들의 비밀스러운 로맨스",
     date: "2026년 6월 29일 (월) 오후 7:30",
     location: "연신내 아지트",
-    posterUrl: "https://images.unsplash.com/photo-1543584756-8f40a802e14f?auto=format&fit=crop&q=80&w=800" // 현재 상영작 포스터 링크
+    posterUrl: "https://media.themoviedb.org/t/p/w220_and_h330_face/yCKaf65zoySg2iJdsews4Rafl7C.jpg" // 현재 상영작 포스터 링크
   },
   next: {
     titleKo: "그 시절, 우리가 사랑했던 소녀",
@@ -25,7 +25,10 @@ const MOVIE_DATA = {
     year: "2011",
     director: "구파도",
     actors: "가진동, 천옌시",
-    posterUrl: "https://images.unsplash.com/photo-1511556532299-8f662fc26c06?auto=format&fit=crop&q=80&w=800" // 다음 상영작 포스터 링크
+    quote: "그 시절, 우리가 사랑했던 소녀",
+    date: "2026년 7월 6일 (수) 오후 7:30",
+    location: "연신내 아지트",
+    posterUrl: "https://media.themoviedb.org/t/p/w300_and_h450_face/ynLYtNB3AOiDX4Ltr1uMea8oNHM.jpg" // 다음 상영작 포스터 링크
   }
 };
 
