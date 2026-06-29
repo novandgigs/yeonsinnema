@@ -84,14 +84,14 @@ export default function App() {
   const [chatMessages, setChatMessages] = useState([]);
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [newChatMessage, setNewChatMessage] = useState('');
-  const [isMuted, setIsMuted] = useState(false); // 음소거 상태
+  const [isMuted, setIsMuted] = useState(false); 
   
   const messagesEndRef = useRef(null);
   const prevChatLengthRef = useRef(0);
   const isFirstLoadRef = useRef(true);
   
-  // 알림음 파일 (짧고 경쾌한 팝 사운드)
-  const notificationSound = useRef(new Audio('https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3'));
+  // [수정됨] 구글에서 제공하는 절대 끊기지 않는 팝 사운드로 교체
+  const notificationSound = useRef(typeof Audio !== "undefined" ? new Audio('https://actions.google.com/sounds/v1/ui/pop.ogg') : null);
   
   const [authMode, setAuthMode] = useState('login'); 
   const [phoneInput, setPhoneInput] = useState('');
@@ -105,6 +105,25 @@ export default function App() {
   const [adminPinInput, setAdminPinInput] = useState('');
   const ADMIN_PIN = "1423"; 
 
+  // [수정됨] 브라우저/스마트폰의 자동재생 차단을 뚫기 위한 코드
+  useEffect(() => {
+    const enableAudio = () => {
+      if (notificationSound.current) {
+        notificationSound.current.load(); // 사용자가 화면을 터치할 때 미리 오디오를 메모리에 로드
+      }
+      document.removeEventListener('click', enableAudio);
+      document.removeEventListener('touchstart', enableAudio);
+    };
+    // 화면을 클릭하거나 터치하는 순간 오디오 차단이 풀립니다.
+    document.addEventListener('click', enableAudio);
+    document.addEventListener('touchstart', enableAudio);
+    
+    return () => {
+      document.removeEventListener('click', enableAudio);
+      document.removeEventListener('touchstart', enableAudio);
+    };
+  }, []);
+
   // 1. Firebase Auth 및 자동 로그인 설정
   useEffect(() => {
     if (!auth) return;
@@ -115,9 +134,7 @@ export default function App() {
         } else {
           await signInAnonymously(auth);
         }
-      } catch (_) {
-        try { await signInAnonymously(auth); } catch(_) {}
-      }
+      } catch (e) { console.log(e); }
     };
     initAuth();
 
@@ -134,7 +151,7 @@ export default function App() {
             } else {
               localStorage.removeItem('yeonsinnema_phone');
             }
-          } catch (_) {}
+          } catch (e) { console.log(e); }
         }
       }
       setIsAuthLoading(false);
@@ -207,7 +224,6 @@ export default function App() {
   // 4. 새 메시지 알림 (소리 및 진동) & 스크롤
   useEffect(() => {
     if (isFirstLoadRef.current) {
-      // 최초 접속시에는 알림을 울리지 않음
       isFirstLoadRef.current = false;
       prevChatLengthRef.current = chatMessages.length;
       return;
@@ -216,18 +232,22 @@ export default function App() {
     if (chatMessages.length > prevChatLengthRef.current) {
       const newMsg = chatMessages[chatMessages.length - 1];
       
-      // 내가 보낸 메시지가 아니고, 무음 모드가 아닐 때만 알림
       if (newMsg.phone !== appUser?.phone && !isMuted) {
-        // 소리 재생 (브라우저 정책에 의해 막힐 수 있으므로 예외 처리)
-        notificationSound.current.play().catch(e => console.log("자동 재생이 차단되었습니다.", e));
+        // [수정됨] 소리 재생 에러 처리 강화
+        if (notificationSound.current) {
+          notificationSound.current.play().catch(e => console.log("소리 재생 실패:", e));
+        }
         
-        // 스마트폰 진동 (지원하는 기기에서만)
-        if ('vibrate' in navigator) {
-          navigator.vibrate([200]); 
+        // 스마트폰 진동 
+        if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+          try {
+            navigator.vibrate([200]); 
+          } catch (e) {
+            console.log("진동 실패:", e);
+          }
         }
       }
       
-      // 채팅창이 열려있으면 맨 아래로 스크롤
       if (isChatOpen) {
         messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
       }
@@ -242,7 +262,6 @@ export default function App() {
     setAuthError('');
     if (!user || !db) return;
     
-    // 차단된 번호인지 검사
     if (BLOCKED_NUMBERS.includes(phoneInput)) {
       setAuthError('해당 번호는 서비스 이용이 영구 제한되었습니다.');
       return;
@@ -280,7 +299,8 @@ export default function App() {
         setAppUser(userInfo);
         localStorage.setItem('yeonsinnema_phone', phoneInput);
       }
-    } catch (_) {
+    } catch (error) {
+      console.log(error);
       setAuthError('오류가 발생했습니다. 잠시 후 다시 시도해주세요.');
     }
   };
@@ -312,7 +332,7 @@ export default function App() {
     if (window.confirm(`정말로 이 회원(*${phone})을 영구 삭제하시겠습니까?\n삭제된 회원은 즉시 앱에서 쫓겨납니다.`)) {
       try {
         await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'profiles', phone));
-      } catch (_) {}
+      } catch (e) { console.log(e); }
     }
   };
 
@@ -321,14 +341,14 @@ export default function App() {
     const newCount = Math.max(0, (currentCount || 0) + delta);
     try {
       await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'profiles', phone), { attendanceCount: newCount }, { merge: true });
-    } catch (_) {}
+    } catch (e) { console.log(e); }
   };
 
   const adminDeleteComment = async (commentId) => {
     if (!user || !db) return;
     try {
       await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'comments', commentId));
-    } catch (_) {}
+    } catch (e) { console.log(e); }
   };
 
 
@@ -346,7 +366,7 @@ export default function App() {
         timestamp: Date.now()
       });
       setNewChatMessage('');
-    } catch (_) {}
+    } catch (e) { console.log(e); }
   };
 
   const submitComment = async (e) => {
@@ -364,7 +384,7 @@ export default function App() {
       });
       setNewComment('');
       setRating(5);
-    } catch (_) {}
+    } catch (e) { console.log(e); }
   };
 
   const deleteComment = async (commentId) => {
@@ -372,7 +392,7 @@ export default function App() {
     if (window.confirm('감상평을 삭제하시겠습니까?')) {
       try {
         await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'comments', commentId));
-      } catch (_) {}
+      } catch (e) { console.log(e); }
     }
   };
 
@@ -387,7 +407,7 @@ export default function App() {
         attendanceCount: appUser.attendanceCount || 0,
         timestamp: Date.now()
       });
-    } catch (_) {}
+    } catch (e) { console.log(e); }
   };
 
   const myAttendance = attendance.find(a => a.phone === appUser?.phone);
