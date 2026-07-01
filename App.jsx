@@ -90,7 +90,7 @@ export default function App() {
   const prevChatLengthRef = useRef(0);
   const isFirstLoadRef = useRef(true);
   
-  // [수정됨] 구글에서 제공하는 절대 끊기지 않는 팝 사운드로 교체
+  // 구글에서 제공하는 절대 끊기지 않는 팝 사운드로 교체
   const notificationSound = useRef(typeof Audio !== "undefined" ? new Audio('https://actions.google.com/sounds/v1/ui/pop.ogg') : null);
   
   const [authMode, setAuthMode] = useState('login'); 
@@ -105,16 +105,15 @@ export default function App() {
   const [adminPinInput, setAdminPinInput] = useState('');
   const ADMIN_PIN = "1423"; 
 
-  // [수정됨] 브라우저/스마트폰의 자동재생 차단을 뚫기 위한 코드
+  // 브라우저/스마트폰의 자동재생 차단을 뚫기 위한 코드
   useEffect(() => {
     const enableAudio = () => {
       if (notificationSound.current) {
-        notificationSound.current.load(); // 사용자가 화면을 터치할 때 미리 오디오를 메모리에 로드
+        notificationSound.current.load();
       }
       document.removeEventListener('click', enableAudio);
       document.removeEventListener('touchstart', enableAudio);
     };
-    // 화면을 클릭하거나 터치하는 순간 오디오 차단이 풀립니다.
     document.addEventListener('click', enableAudio);
     document.addEventListener('touchstart', enableAudio);
     
@@ -181,20 +180,24 @@ export default function App() {
   useEffect(() => {
     if (!user || !db || !appUser) return;
 
-    const commentsRef = collection(db, 'artifacts', appId, 'public', 'data', 'comments');
+    // [핵심 변경] 감상평과 출석부의 경로에 현재 영화 제목(MOVIE_DATA.current.titleKo)을 포함시킵니다!
+    const currentMovieTitle = MOVIE_DATA.current.titleKo;
+
+    const commentsRef = collection(db, 'artifacts', appId, 'public', 'data', 'movies', currentMovieTitle, 'comments');
     const unsubComments = onSnapshot(commentsRef, (snapshot) => {
       const loadedComments = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       loadedComments.sort((a, b) => b.timestamp - a.timestamp); 
       setComments(loadedComments);
     });
 
-    const attendanceRef = collection(db, 'artifacts', appId, 'public', 'data', 'attendance');
+    const attendanceRef = collection(db, 'artifacts', appId, 'public', 'data', 'movies', currentMovieTitle, 'attendance');
     const unsubAttendance = onSnapshot(attendanceRef, (snapshot) => {
       const loadedAttendance = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       loadedAttendance.sort((a, b) => b.timestamp - a.timestamp);
       setAttendance(loadedAttendance);
     });
 
+    // 채팅은 영화가 바뀌어도 계속 유지되도록 원래 경로 그대로 둡니다.
     const chatRef = collection(db, 'artifacts', appId, 'public', 'data', 'chatMessages');
     const unsubChat = onSnapshot(chatRef, (snapshot) => {
       const loadedChat = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
@@ -233,17 +236,14 @@ export default function App() {
       const newMsg = chatMessages[chatMessages.length - 1];
       
       if (newMsg.phone !== appUser?.phone && !isMuted) {
-        // [수정됨] 소리 재생 에러 처리 강화
         if (notificationSound.current) {
-          notificationSound.current.play().catch(e => console.log("소리 재생 실패:", e));
+          notificationSound.current.play().catch(e => console.log(e));
         }
-        
-        // 스마트폰 진동 
         if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
           try {
             navigator.vibrate([200]); 
           } catch (e) {
-            console.log("진동 실패:", e);
+            console.log(e);
           }
         }
       }
@@ -347,7 +347,8 @@ export default function App() {
   const adminDeleteComment = async (commentId) => {
     if (!user || !db) return;
     try {
-      await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'comments', commentId));
+      const currentMovieTitle = MOVIE_DATA.current.titleKo;
+      await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'movies', currentMovieTitle, 'comments', commentId));
     } catch (e) { console.log(e); }
   };
 
@@ -373,7 +374,8 @@ export default function App() {
     e.preventDefault();
     if (!newComment.trim() || !user || !db) return;
     try {
-      const commentsRef = collection(db, 'artifacts', appId, 'public', 'data', 'comments');
+      const currentMovieTitle = MOVIE_DATA.current.titleKo;
+      const commentsRef = collection(db, 'artifacts', appId, 'public', 'data', 'movies', currentMovieTitle, 'comments');
       await addDoc(commentsRef, {
         nickname: appUser.nickname,
         phone: appUser.phone,
@@ -391,7 +393,8 @@ export default function App() {
     if (!user || !db) return;
     if (window.confirm('감상평을 삭제하시겠습니까?')) {
       try {
-        await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'comments', commentId));
+        const currentMovieTitle = MOVIE_DATA.current.titleKo;
+        await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'movies', currentMovieTitle, 'comments', commentId));
       } catch (e) { console.log(e); }
     }
   };
@@ -399,7 +402,8 @@ export default function App() {
   const toggleAttendance = async (status) => {
     if (!user || !db || !appUser) return;
     try {
-      const attendanceRef = doc(db, 'artifacts', appId, 'public', 'data', 'attendance', appUser.phone);
+      const currentMovieTitle = MOVIE_DATA.current.titleKo;
+      const attendanceRef = doc(db, 'artifacts', appId, 'public', 'data', 'movies', currentMovieTitle, 'attendance', appUser.phone);
       await setDoc(attendanceRef, {
         nickname: appUser.nickname,
         phone: appUser.phone,
