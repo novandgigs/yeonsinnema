@@ -1,36 +1,35 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { MessageSquare, CalendarDays, Users, LogOut, Star, CheckCircle2, UserPlus, LogIn, Quote, Clapperboard, Settings, Lock, X, Trash2, MessageCircle, Send } from 'lucide-react';
+import { MessageSquare, CalendarDays, Users, LogOut, Star, CheckCircle2, UserPlus, LogIn, Quote, Clapperboard, Settings, Lock, X, Trash2, MessageCircle, Send, Bell, BellOff } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'firebase/auth';
 import { getFirestore, collection, doc, setDoc, getDoc, onSnapshot, addDoc, deleteDoc } from 'firebase/firestore';
 
 // --- 차단할 전화번호 목록 (블랙리스트) ---
-// 사장님, 가입이나 로그인을 막고 싶은 번호 뒷 4자리를 이곳에 쉼표로 구분해서 적어주세요.
 const BLOCKED_NUMBERS = ["9999", "0000", "1234"]; 
 
 // --- 관리자 설정 (영화 정보 및 포스터 변경) ---
 const MOVIE_DATA = {
   current: {
-    titleKo: "화양연화",
-    titleEn: "In the Mood for Love",
-    year: "2000",
-    director: "왕가위",
-    actors: "양조위, 장만옥",
-    quote: "가장 아름답고 찬란했던 시절, 그들의 비밀스러운 로맨스",
-    date: "2026년 6월 29일 (월) 오후 7:30",
-    location: "연신내 아지트",
-    posterUrl: "https://media.themoviedb.org/t/p/w220_and_h330_face/yCKaf65zoySg2iJdsews4Rafl7C.jpg"
-  },
-  next: {
     titleKo: "그 시절, 우리가 사랑했던 소녀",
     titleEn: "You Are the Apple of My Eye",
     year: "2011",
     director: "구파도",
     actors: "가진동, 천옌시",
-    quote: "그 시절, 우리가 사랑했던 소녀",
-    date: "2026년 7월 6일 (수) 오후 7:30",
+    quote: "눈부시게 찬란했던 17살, 내 청춘 안에는 늘 네가 있었어",
+    date: "2026년 7월 6일 (월) 오후 7:30",
     location: "연신내 아지트",
     posterUrl: "https://media.themoviedb.org/t/p/w300_and_h450_face/ynLYtNB3AOiDX4Ltr1uMea8oNHM.jpg"
+  },
+  next: {
+    titleKo: "프렌치 디스페치",
+    titleEn: "The French Dispatch",
+    year: "2021",
+    director: "웨스 앤더슨",
+    actors: "빌 머레이, 틸다 스윈튼, 티모시 샬라메",
+    quote: "독보적인 미장센, 저널리스트들을 향한 아름다운 러브레터",
+    date: "2026년 7월 13일 (월) 오후 7:30",
+    location: "연신내 아지트",
+    posterUrl: "https://media.themoviedb.org/t/p/w300_and_h450_face/6nS7g1zIqA4VtozC4L2s1E6B9V1.jpg"
   }
 };
 
@@ -63,7 +62,6 @@ const getTierInfo = (count) => {
   return { name: '그린티켓', style: 'bg-green-900/40 text-green-400 border-green-700/50' };
 };
 
-// 티어 배지 컴포넌트
 const TierBadge = ({ count }) => {
   const tier = getTierInfo(count || 0);
   return (
@@ -75,17 +73,25 @@ const TierBadge = ({ count }) => {
 
 export default function App() {
   const [user, setUser] = useState(null);
-  const [appUser, setAppUser] = useState(null); // { nickname, phone, attendanceCount }
+  const [appUser, setAppUser] = useState(null); 
   const [isAuthLoading, setIsAuthLoading] = useState(true);
   
   const [comments, setComments] = useState([]);
   const [attendance, setAttendance] = useState([]);
   const [profiles, setProfiles] = useState([]); 
   
+  // 실시간 채팅 & 알림 상태
   const [chatMessages, setChatMessages] = useState([]);
   const [isChatOpen, setIsChatOpen] = useState(false);
   const [newChatMessage, setNewChatMessage] = useState('');
+  const [isMuted, setIsMuted] = useState(false); 
+  
   const messagesEndRef = useRef(null);
+  const prevChatLengthRef = useRef(0);
+  const isFirstLoadRef = useRef(true);
+  
+  // 구글에서 제공하는 절대 끊기지 않는 팝 사운드로 교체
+  const notificationSound = useRef(typeof Audio !== "undefined" ? new Audio('https://actions.google.com/sounds/v1/ui/pop.ogg') : null);
   
   const [authMode, setAuthMode] = useState('login'); 
   const [phoneInput, setPhoneInput] = useState('');
@@ -99,6 +105,24 @@ export default function App() {
   const [adminPinInput, setAdminPinInput] = useState('');
   const ADMIN_PIN = "1423"; 
 
+  // 브라우저/스마트폰의 자동재생 차단을 뚫기 위한 코드
+  useEffect(() => {
+    const enableAudio = () => {
+      if (notificationSound.current) {
+        notificationSound.current.load();
+      }
+      document.removeEventListener('click', enableAudio);
+      document.removeEventListener('touchstart', enableAudio);
+    };
+    document.addEventListener('click', enableAudio);
+    document.addEventListener('touchstart', enableAudio);
+    
+    return () => {
+      document.removeEventListener('click', enableAudio);
+      document.removeEventListener('touchstart', enableAudio);
+    };
+  }, []);
+
   // 1. Firebase Auth 및 자동 로그인 설정
   useEffect(() => {
     if (!auth) return;
@@ -109,10 +133,7 @@ export default function App() {
         } else {
           await signInAnonymously(auth);
         }
-      } catch (error) {
-        console.error("Auth Error:", error);
-        try { await signInAnonymously(auth); } catch(e) {}
-      }
+      } catch (e) { console.log(e); }
     };
     initAuth();
 
@@ -129,7 +150,7 @@ export default function App() {
             } else {
               localStorage.removeItem('yeonsinnema_phone');
             }
-          } catch (e) {}
+          } catch (e) { console.log(e); }
         }
       }
       setIsAuthLoading(false);
@@ -137,7 +158,7 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  // 1-2. 현재 로그인된 회원의 정보를 실시간으로 감시 (강제삭제 대비 및 등급 즉시 반영)
+  // 1-2. 현재 로그인된 회원의 정보 실시간 감시 (강제삭제 대비)
   useEffect(() => {
     if (!db || !appUser?.phone) return;
     const userRef = doc(db, 'artifacts', appId, 'public', 'data', 'profiles', appUser.phone);
@@ -145,35 +166,38 @@ export default function App() {
       if (docSnap.exists()) {
         setAppUser(prev => ({ ...prev, ...docSnap.data() }));
       } else {
-        // 관리자가 회원을 삭제한 경우 즉시 로그아웃 처리
         setAppUser(null);
         localStorage.removeItem('yeonsinnema_phone');
         setIsAdminMode(false);
         setIsChatOpen(false);
-        alert('관리자에 의해 계정이 삭제되어 로그아웃되었습니다.'); // 강제 아웃 알림
+        alert('관리자에 의해 계정이 삭제되어 로그아웃되었습니다.');
       }
     });
     return () => unsub();
   }, [db, appUser?.phone]);
 
-  // 2. 실시간 데이터 불러오기
+  // 2. 실시간 데이터 불러오기 (Firestore)
   useEffect(() => {
     if (!user || !db || !appUser) return;
 
-    const commentsRef = collection(db, 'artifacts', appId, 'public', 'data', 'comments');
+    // [핵심 변경] 감상평과 출석부의 경로에 현재 영화 제목(MOVIE_DATA.current.titleKo)을 포함시킵니다!
+    const currentMovieTitle = MOVIE_DATA.current.titleKo;
+
+    const commentsRef = collection(db, 'artifacts', appId, 'public', 'data', 'movies', currentMovieTitle, 'comments');
     const unsubComments = onSnapshot(commentsRef, (snapshot) => {
       const loadedComments = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       loadedComments.sort((a, b) => b.timestamp - a.timestamp); 
       setComments(loadedComments);
     });
 
-    const attendanceRef = collection(db, 'artifacts', appId, 'public', 'data', 'attendance');
+    const attendanceRef = collection(db, 'artifacts', appId, 'public', 'data', 'movies', currentMovieTitle, 'attendance');
     const unsubAttendance = onSnapshot(attendanceRef, (snapshot) => {
       const loadedAttendance = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       loadedAttendance.sort((a, b) => b.timestamp - a.timestamp);
       setAttendance(loadedAttendance);
     });
 
+    // 채팅은 영화가 바뀌어도 계속 유지되도록 원래 경로 그대로 둡니다.
     const chatRef = collection(db, 'artifacts', appId, 'public', 'data', 'chatMessages');
     const unsubChat = onSnapshot(chatRef, (snapshot) => {
       const loadedChat = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
@@ -188,7 +212,7 @@ export default function App() {
     };
   }, [user, appUser]);
 
-  // 3. 관리자용 데이터 불러오기
+  // 3. 관리자용 회원 목록 불러오기
   useEffect(() => {
     if (!user || !db || !isAdminMode) return;
     const profilesRef = collection(db, 'artifacts', appId, 'public', 'data', 'profiles');
@@ -200,12 +224,36 @@ export default function App() {
     return () => unsubProfiles();
   }, [user, isAdminMode, db]);
 
-  // 채팅창 자동 스크롤
+  // 4. 새 메시지 알림 (소리 및 진동) & 스크롤
   useEffect(() => {
-    if (isChatOpen) {
-      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    if (isFirstLoadRef.current) {
+      isFirstLoadRef.current = false;
+      prevChatLengthRef.current = chatMessages.length;
+      return;
     }
-  }, [chatMessages, isChatOpen]);
+
+    if (chatMessages.length > prevChatLengthRef.current) {
+      const newMsg = chatMessages[chatMessages.length - 1];
+      
+      if (newMsg.phone !== appUser?.phone && !isMuted) {
+        if (notificationSound.current) {
+          notificationSound.current.play().catch(e => console.log(e));
+        }
+        if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+          try {
+            navigator.vibrate([200]); 
+          } catch (e) {
+            console.log(e);
+          }
+        }
+      }
+      
+      if (isChatOpen) {
+        messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+      }
+    }
+    prevChatLengthRef.current = chatMessages.length;
+  }, [chatMessages, isMuted, appUser, isChatOpen]);
 
 
   // --- 인증 관련 함수 ---
@@ -214,7 +262,6 @@ export default function App() {
     setAuthError('');
     if (!user || !db) return;
     
-    // 차단된 번호인지 검사
     if (BLOCKED_NUMBERS.includes(phoneInput)) {
       setAuthError('해당 번호는 서비스 이용이 영구 제한되었습니다.');
       return;
@@ -247,13 +294,13 @@ export default function App() {
           return;
         }
         
-        // 신규 가입시 출석 횟수(attendanceCount) 0으로 초기화
         const userInfo = { nickname: nicknameInput, phone: phoneInput, uid: user.uid, createdAt: Date.now(), attendanceCount: 0 };
         await setDoc(profileRef, userInfo);
         setAppUser(userInfo);
         localStorage.setItem('yeonsinnema_phone', phoneInput);
       }
     } catch (error) {
+      console.log(error);
       setAuthError('오류가 발생했습니다. 잠시 후 다시 시도해주세요.');
     }
   };
@@ -280,34 +327,29 @@ export default function App() {
     }
   };
 
-  // 회원 삭제 함수 (추가됨)
   const adminDeleteProfile = async (phone) => {
     if (!user || !db) return;
     if (window.confirm(`정말로 이 회원(*${phone})을 영구 삭제하시겠습니까?\n삭제된 회원은 즉시 앱에서 쫓겨납니다.`)) {
       try {
         await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'profiles', phone));
-      } catch (error) {
-        console.error("Delete profile error:", error);
-      }
+      } catch (e) { console.log(e); }
     }
   };
 
-  // 회원 참석 횟수 수정 함수 (추가됨)
   const adminUpdateAttendanceCount = async (phone, currentCount, delta) => {
     if (!user || !db) return;
     const newCount = Math.max(0, (currentCount || 0) + delta);
     try {
       await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'profiles', phone), { attendanceCount: newCount }, { merge: true });
-    } catch (error) {
-      console.error("Update attendance count error:", error);
-    }
+    } catch (e) { console.log(e); }
   };
 
   const adminDeleteComment = async (commentId) => {
     if (!user || !db) return;
     try {
-      await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'comments', commentId));
-    } catch (error) {}
+      const currentMovieTitle = MOVIE_DATA.current.titleKo;
+      await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'movies', currentMovieTitle, 'comments', commentId));
+    } catch (e) { console.log(e); }
   };
 
 
@@ -321,52 +363,55 @@ export default function App() {
         nickname: appUser.nickname,
         phone: appUser.phone,
         text: newChatMessage,
-        attendanceCount: appUser.attendanceCount || 0, // 채팅 시점의 등급 기록
+        attendanceCount: appUser.attendanceCount || 0,
         timestamp: Date.now()
       });
       setNewChatMessage('');
-    } catch (error) {}
+    } catch (e) { console.log(e); }
   };
 
   const submitComment = async (e) => {
     e.preventDefault();
     if (!newComment.trim() || !user || !db) return;
     try {
-      const commentsRef = collection(db, 'artifacts', appId, 'public', 'data', 'comments');
+      const currentMovieTitle = MOVIE_DATA.current.titleKo;
+      const commentsRef = collection(db, 'artifacts', appId, 'public', 'data', 'movies', currentMovieTitle, 'comments');
       await addDoc(commentsRef, {
         nickname: appUser.nickname,
         phone: appUser.phone,
         text: newComment,
         rating: rating,
-        attendanceCount: appUser.attendanceCount || 0, // 감상평 작성 시점의 등급 기록
+        attendanceCount: appUser.attendanceCount || 0,
         timestamp: Date.now()
       });
       setNewComment('');
       setRating(5);
-    } catch (error) {}
+    } catch (e) { console.log(e); }
   };
 
   const deleteComment = async (commentId) => {
     if (!user || !db) return;
     if (window.confirm('감상평을 삭제하시겠습니까?')) {
       try {
-        await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'comments', commentId));
-      } catch (error) {}
+        const currentMovieTitle = MOVIE_DATA.current.titleKo;
+        await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'movies', currentMovieTitle, 'comments', commentId));
+      } catch (e) { console.log(e); }
     }
   };
 
   const toggleAttendance = async (status) => {
     if (!user || !db || !appUser) return;
     try {
-      const attendanceRef = doc(db, 'artifacts', appId, 'public', 'data', 'attendance', appUser.phone);
+      const currentMovieTitle = MOVIE_DATA.current.titleKo;
+      const attendanceRef = doc(db, 'artifacts', appId, 'public', 'data', 'movies', currentMovieTitle, 'attendance', appUser.phone);
       await setDoc(attendanceRef, {
         nickname: appUser.nickname,
         phone: appUser.phone,
         status: status, 
-        attendanceCount: appUser.attendanceCount || 0, // 출석체크 시점의 등급
+        attendanceCount: appUser.attendanceCount || 0,
         timestamp: Date.now()
       });
-    } catch (error) {}
+    } catch (e) { console.log(e); }
   };
 
   const myAttendance = attendance.find(a => a.phone === appUser?.phone);
@@ -437,7 +482,6 @@ export default function App() {
                     </div>
                   </div>
                   
-                  {/* 등급 조작 및 회원 삭제 */}
                   <div className="flex items-center gap-3 w-full sm:w-auto justify-end">
                     <div className="flex items-center bg-[#021e22] rounded-lg border border-[#144950] p-1 shadow-inner">
                       <button onClick={() => adminUpdateAttendanceCount(profile.phone, profile.attendanceCount, -1)} className="px-2.5 text-gray-400 hover:text-red-400 text-lg font-bold transition-colors">-</button>
@@ -937,12 +981,23 @@ export default function App() {
       {/* 라이브 채팅 슬라이드 패널 */}
       {isChatOpen && (
         <div className="fixed bottom-24 right-4 md:right-6 w-[calc(100%-2rem)] md:w-96 bg-gradient-to-b from-[#03252a] to-[#011619] rounded-3xl shadow-[0_20px_50px_rgba(0,0,0,0.8)] border border-[#d4af37] border-opacity-40 z-50 overflow-hidden flex flex-col h-[500px] max-h-[70vh] animate-in slide-in-from-bottom-10 fade-in duration-300">
+          
+          {/* 채팅방 헤더 (무음 토글 버튼 추가됨) */}
           <div className="p-4 bg-[#021a1d] border-b border-[#144950] flex justify-between items-center shadow-md">
             <h3 className="text-[#fbf5b7] font-bold flex items-center gap-2 text-sm tracking-widest">
               <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
               LIVE CHAT
             </h3>
-            <span className="text-xs text-[#d4af37] opacity-60">연신네마 라운지</span>
+            <div className="flex items-center gap-3">
+              <button 
+                onClick={() => setIsMuted(!isMuted)} 
+                className="text-[#d4af37] opacity-60 hover:opacity-100 transition-opacity p-1 bg-[#011214] rounded-full border border-[#144950]"
+                title={isMuted ? "알림 켜기" : "알림 끄기"}
+              >
+                {isMuted ? <BellOff className="w-3.5 h-3.5" /> : <Bell className="w-3.5 h-3.5" />}
+              </button>
+              <span className="text-xs text-[#d4af37] opacity-60">연신네마 라운지</span>
+            </div>
           </div>
 
           {/* 대화창 영역 */}
