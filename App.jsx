@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { MessageSquare, CalendarDays, Users, LogOut, Star, CheckCircle2, UserPlus, LogIn, Quote, Clapperboard, Settings, Lock, X, Trash2, MessageCircle, Send, Bell, BellOff } from 'lucide-react';
+import { MessageSquare, CalendarDays, Users, LogOut, Star, CheckCircle2, UserPlus, LogIn, Quote, Clapperboard, Settings, Lock, X, Trash2, MessageCircle, Send, Bell, BellOff, History } from 'lucide-react';
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'firebase/auth';
 import { getFirestore, collection, doc, setDoc, getDoc, onSnapshot, addDoc, deleteDoc } from 'firebase/firestore';
@@ -30,7 +30,16 @@ const MOVIE_DATA = {
     date: "2026년 7월 13일 (월) 오후 7:30",
     location: "연신내 아지트",
     posterUrl: "https://media.themoviedb.org/t/p/w300_and_h450_face/6nS7g1zIqA4VtozC4L2s1E6B9V1.jpg"
-  }
+  },
+  // 💡 사장님 팁: 매주 영화가 끝날 때마다, current에 있던 내용을 이 past 목록(대괄호 안)으로 옮겨주시면 아카이브에 영구 저장됩니다!
+  past: [
+    {
+      titleKo: "화양연화",
+      titleEn: "In the Mood for Love",
+      year: "2000",
+      posterUrl: "https://media.themoviedb.org/t/p/w300_and_h450_face/1QOyoEAaU5Q72iEkiZqU7F6lA2X.jpg"
+    }
+  ]
 };
 
 // --- Firebase 초기화 ---
@@ -80,6 +89,10 @@ export default function App() {
   const [attendance, setAttendance] = useState([]);
   const [profiles, setProfiles] = useState([]); 
   
+  // 과거 상영작 상태 관리
+  const [selectedPastMovie, setSelectedPastMovie] = useState(null);
+  const [pastComments, setPastComments] = useState([]);
+
   // 실시간 채팅 & 알림 상태
   const [chatMessages, setChatMessages] = useState([]);
   const [isChatOpen, setIsChatOpen] = useState(false);
@@ -90,7 +103,6 @@ export default function App() {
   const prevChatLengthRef = useRef(0);
   const isFirstLoadRef = useRef(true);
   
-  // 구글에서 제공하는 절대 끊기지 않는 팝 사운드로 교체
   const notificationSound = useRef(typeof Audio !== "undefined" ? new Audio('https://actions.google.com/sounds/v1/ui/pop.ogg') : null);
   
   const [authMode, setAuthMode] = useState('login'); 
@@ -105,18 +117,15 @@ export default function App() {
   const [adminPinInput, setAdminPinInput] = useState('');
   const ADMIN_PIN = "1423"; 
 
-  // 브라우저/스마트폰의 자동재생 차단을 뚫기 위한 코드
+  // 오디오 권한 잠금 해제
   useEffect(() => {
     const enableAudio = () => {
-      if (notificationSound.current) {
-        notificationSound.current.load();
-      }
+      if (notificationSound.current) notificationSound.current.load();
       document.removeEventListener('click', enableAudio);
       document.removeEventListener('touchstart', enableAudio);
     };
     document.addEventListener('click', enableAudio);
     document.addEventListener('touchstart', enableAudio);
-    
     return () => {
       document.removeEventListener('click', enableAudio);
       document.removeEventListener('touchstart', enableAudio);
@@ -158,7 +167,7 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  // 1-2. 현재 로그인된 회원의 정보 실시간 감시 (강제삭제 대비)
+  // 1-2. 현재 로그인된 회원의 정보 실시간 감시 (강제삭제 및 참석 횟수 실시간 연동)
   useEffect(() => {
     if (!db || !appUser?.phone) return;
     const userRef = doc(db, 'artifacts', appId, 'public', 'data', 'profiles', appUser.phone);
@@ -176,11 +185,9 @@ export default function App() {
     return () => unsub();
   }, [db, appUser?.phone]);
 
-  // 2. 실시간 데이터 불러오기 (Firestore)
+  // 2. 현재 영화의 실시간 데이터 불러오기 (출석부 & 감상평)
   useEffect(() => {
     if (!user || !db || !appUser) return;
-
-    // [핵심 변경] 감상평과 출석부의 경로에 현재 영화 제목(MOVIE_DATA.current.titleKo)을 포함시킵니다!
     const currentMovieTitle = MOVIE_DATA.current.titleKo;
 
     const commentsRef = collection(db, 'artifacts', appId, 'public', 'data', 'movies', currentMovieTitle, 'comments');
@@ -197,7 +204,6 @@ export default function App() {
       setAttendance(loadedAttendance);
     });
 
-    // 채팅은 영화가 바뀌어도 계속 유지되도록 원래 경로 그대로 둡니다.
     const chatRef = collection(db, 'artifacts', appId, 'public', 'data', 'chatMessages');
     const unsubChat = onSnapshot(chatRef, (snapshot) => {
       const loadedChat = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
@@ -205,14 +211,22 @@ export default function App() {
       setChatMessages(loadedChat);
     });
 
-    return () => {
-      unsubComments();
-      unsubAttendance();
-      unsubChat();
-    };
+    return () => { unsubComments(); unsubAttendance(); unsubChat(); };
   }, [user, appUser]);
 
-  // 3. 관리자용 회원 목록 불러오기
+  // 3. 과거 영화 감상평 불러오기 (아카이브 클릭 시)
+  useEffect(() => {
+    if (!db || !selectedPastMovie) return;
+    const pastRef = collection(db, 'artifacts', appId, 'public', 'data', 'movies', selectedPastMovie.titleKo, 'comments');
+    const unsub = onSnapshot(pastRef, (snapshot) => {
+      const loaded = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      loaded.sort((a, b) => b.timestamp - a.timestamp);
+      setPastComments(loaded);
+    });
+    return () => unsub();
+  }, [db, selectedPastMovie]);
+
+  // 4. 관리자용 회원 목록 불러오기
   useEffect(() => {
     if (!user || !db || !isAdminMode) return;
     const profilesRef = collection(db, 'artifacts', appId, 'public', 'data', 'profiles');
@@ -224,7 +238,7 @@ export default function App() {
     return () => unsubProfiles();
   }, [user, isAdminMode, db]);
 
-  // 4. 새 메시지 알림 (소리 및 진동) & 스크롤
+  // 5. 새 메시지 알림 (소리 및 진동)
   useEffect(() => {
     if (isFirstLoadRef.current) {
       isFirstLoadRef.current = false;
@@ -234,23 +248,13 @@ export default function App() {
 
     if (chatMessages.length > prevChatLengthRef.current) {
       const newMsg = chatMessages[chatMessages.length - 1];
-      
       if (newMsg.phone !== appUser?.phone && !isMuted) {
-        if (notificationSound.current) {
-          notificationSound.current.play().catch(e => console.log(e));
-        }
+        if (notificationSound.current) notificationSound.current.play().catch(e => console.log(e));
         if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
-          try {
-            navigator.vibrate([200]); 
-          } catch (e) {
-            console.log(e);
-          }
+          try { navigator.vibrate([200]); } catch (e) { console.log(e); }
         }
       }
-      
-      if (isChatOpen) {
-        messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-      }
+      if (isChatOpen) messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
     }
     prevChatLengthRef.current = chatMessages.length;
   }, [chatMessages, isMuted, appUser, isChatOpen]);
@@ -266,7 +270,6 @@ export default function App() {
       setAuthError('해당 번호는 서비스 이용이 영구 제한되었습니다.');
       return;
     }
-
     if (phoneInput.length !== 4) {
       setAuthError('전화번호 뒷 4자리를 정확히 입력해주세요.');
       return;
@@ -284,15 +287,9 @@ export default function App() {
           setAuthError('등록되지 않은 번호입니다. 신규 가입을 진행해주세요.');
         }
       } else {
-        if (!nicknameInput.trim()) {
-          setAuthError('닉네임을 입력해주세요.');
-          return;
-        }
+        if (!nicknameInput.trim()) { setAuthError('닉네임을 입력해주세요.'); return; }
         const profileSnap = await getDoc(profileRef);
-        if (profileSnap.exists()) {
-          setAuthError('이미 가입된 번호입니다. 로그인해주세요.');
-          return;
-        }
+        if (profileSnap.exists()) { setAuthError('이미 가입된 번호입니다. 로그인해주세요.'); return; }
         
         const userInfo = { nickname: nicknameInput, phone: phoneInput, uid: user.uid, createdAt: Date.now(), attendanceCount: 0 };
         await setDoc(profileRef, userInfo);
@@ -328,24 +325,22 @@ export default function App() {
   };
 
   const adminDeleteProfile = async (phone) => {
-    if (!user || !db) return;
-    if (window.confirm(`정말로 이 회원(*${phone})을 영구 삭제하시겠습니까?\n삭제된 회원은 즉시 앱에서 쫓겨납니다.`)) {
-      try {
-        await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'profiles', phone));
-      } catch (e) { console.log(e); }
+    if (!db) return;
+    if (window.confirm(`정말로 이 회원(*${phone})을 영구 삭제하시겠습니까?`)) {
+      try { await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'profiles', phone)); } 
+      catch (e) { console.log(e); }
     }
   };
 
   const adminUpdateAttendanceCount = async (phone, currentCount, delta) => {
-    if (!user || !db) return;
+    if (!db) return;
     const newCount = Math.max(0, (currentCount || 0) + delta);
-    try {
-      await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'profiles', phone), { attendanceCount: newCount }, { merge: true });
-    } catch (e) { console.log(e); }
+    try { await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'profiles', phone), { attendanceCount: newCount }, { merge: true }); } 
+    catch (e) { console.log(e); }
   };
 
   const adminDeleteComment = async (commentId) => {
-    if (!user || !db) return;
+    if (!db) return;
     try {
       const currentMovieTitle = MOVIE_DATA.current.titleKo;
       await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'movies', currentMovieTitle, 'comments', commentId));
@@ -389,26 +384,43 @@ export default function App() {
     } catch (e) { console.log(e); }
   };
 
-  const deleteComment = async (commentId) => {
-    if (!user || !db) return;
+  const deleteComment = async (commentId, movieTitle = MOVIE_DATA.current.titleKo) => {
+    if (!db) return;
     if (window.confirm('감상평을 삭제하시겠습니까?')) {
       try {
-        const currentMovieTitle = MOVIE_DATA.current.titleKo;
-        await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'movies', currentMovieTitle, 'comments', commentId));
+        await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'movies', movieTitle, 'comments', commentId));
       } catch (e) { console.log(e); }
     }
   };
 
+  // ⭐️ [핵심] 참석 버튼 클릭 시 누적 횟수(등급) 자동 업데이트
   const toggleAttendance = async (status) => {
     if (!user || !db || !appUser) return;
     try {
       const currentMovieTitle = MOVIE_DATA.current.titleKo;
+      const myPrevStatus = attendance.find(a => a.phone === appUser.phone)?.status;
+      
+      if (myPrevStatus === status) return; // 변동 없음
+
+      // 1. 프로필의 총 참석 횟수 조절 (자동 등급업)
+      let newCount = appUser.attendanceCount || 0;
+      if (status === 'going' && myPrevStatus !== 'going') {
+        newCount += 1;
+      } else if (status === 'not_going' && myPrevStatus === 'going') {
+        newCount = Math.max(0, newCount - 1);
+      }
+
+      // 프로필 업데이트
+      const profileRef = doc(db, 'artifacts', appId, 'public', 'data', 'profiles', appUser.phone);
+      await setDoc(profileRef, { attendanceCount: newCount }, { merge: true });
+
+      // 2. 현재 영화 출석부 업데이트
       const attendanceRef = doc(db, 'artifacts', appId, 'public', 'data', 'movies', currentMovieTitle, 'attendance', appUser.phone);
       await setDoc(attendanceRef, {
         nickname: appUser.nickname,
         phone: appUser.phone,
         status: status, 
-        attendanceCount: appUser.attendanceCount || 0,
+        attendanceCount: newCount,
         timestamp: Date.now()
       });
     } catch (e) { console.log(e); }
@@ -453,7 +465,7 @@ export default function App() {
           </div>
           <div className="bg-gradient-to-br from-[#03252a] to-[#011619] p-6 rounded-3xl border border-[#144950] shadow-lg flex items-center justify-between">
             <div>
-              <p className="text-gray-400 text-sm mb-1 font-bold tracking-widest">등록된 감상평</p>
+              <p className="text-gray-400 text-sm mb-1 font-bold tracking-widest">이번 주 감상평</p>
               <p className="text-4xl font-extrabold text-[#d4af37]">{comments.length} <span className="text-lg text-gray-500">개</span></p>
             </div>
             <MessageSquare className="w-12 h-12 text-[#144950] opacity-50" />
@@ -481,7 +493,6 @@ export default function App() {
                       <span className="text-xs text-[#d4af37] font-mono tracking-widest">*{profile.phone}</span>
                     </div>
                   </div>
-                  
                   <div className="flex items-center gap-3 w-full sm:w-auto justify-end">
                     <div className="flex items-center bg-[#021e22] rounded-lg border border-[#144950] p-1 shadow-inner">
                       <button onClick={() => adminUpdateAttendanceCount(profile.phone, profile.attendanceCount, -1)} className="px-2.5 text-gray-400 hover:text-red-400 text-lg font-bold transition-colors">-</button>
@@ -507,7 +518,7 @@ export default function App() {
           {/* 감상평 관리 */}
           <div className="bg-gradient-to-br from-[#03252a] to-[#011619] p-6 md:p-8 rounded-3xl border border-[#144950] shadow-lg">
             <h2 className="text-xl font-bold text-[#fbf5b7] mb-6 flex items-center gap-2 border-b border-[#144950] pb-4">
-              <MessageSquare className="w-6 h-6 text-[#d4af37]" /> 감상평 강제 삭제 관리
+              <MessageSquare className="w-6 h-6 text-[#d4af37]" /> 이번 주 감상평 강제 삭제
             </h2>
             <div className="space-y-4 max-h-[500px] overflow-y-auto pr-2 custom-scrollbar">
               {comments.length === 0 ? <p className="text-gray-500 text-center py-10">등록된 감상평이 없습니다.</p> : comments.map(comment => (
@@ -825,12 +836,12 @@ export default function App() {
           </div>
         </section>
 
-        {/* Section 3: 감상평 */}
+        {/* Section 3: 이번 주 감상평 */}
         <section id="reviews" className="scroll-mt-24">
           <div className="flex items-center gap-3 mb-6">
              <span className="w-8 h-px bg-gradient-to-r from-[#d4af37] to-transparent opacity-70"></span>
              <h2 className="text-xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-[#fbf5b7] via-[#d4af37] to-[#aa801e] uppercase tracking-widest flex items-center gap-2 drop-shadow-md">
-               감상평
+               이번 주 감상평
              </h2>
           </div>
           
@@ -919,7 +930,7 @@ export default function App() {
         </section>
 
         {/* Section 4: 다음 영화 예고 */}
-        <section id="next-movie" className="scroll-mt-24 pb-12">
+        <section id="next-movie" className="scroll-mt-24 pb-8">
            <div className="flex items-center gap-3 mb-6">
              <span className="w-8 h-px bg-gradient-to-r from-[#d4af37] to-transparent opacity-40"></span>
              <h2 className="text-xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-gray-300 to-gray-500 uppercase tracking-widest flex items-center gap-2">
@@ -928,7 +939,6 @@ export default function App() {
           </div>
           <div className="bg-[#011214] rounded-3xl overflow-hidden shadow-[0_20px_40px_rgba(0,0,0,0.8)] border border-[#144950] opacity-90 hover:opacity-100 transition-opacity">
              <div className="flex flex-col sm:flex-row">
-                {/* 포스터 미니 영역 */}
                 <div className="w-full sm:w-1/3 aspect-video sm:aspect-auto bg-black relative overflow-hidden">
                    <img 
                       src={MOVIE_DATA.next.posterUrl} 
@@ -938,7 +948,6 @@ export default function App() {
                     <div className="absolute inset-0 bg-gradient-to-t from-[#011214] to-transparent sm:bg-gradient-to-r"></div>
                 </div>
                 
-                {/* 텍스트 영역 */}
                 <div className="w-full sm:w-2/3 p-6 md:p-8 flex flex-col justify-center relative z-10 bg-gradient-to-l from-[#021a1d] to-transparent">
                    <p className="text-[10px] font-bold text-[#d4af37] mb-2 tracking-widest uppercase opacity-80">Next Week</p>
                    <h3 className="text-2xl sm:text-3xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-white to-gray-400 mb-1 drop-shadow-md">{MOVIE_DATA.next.titleKo}</h3>
@@ -947,7 +956,6 @@ export default function App() {
                    <div className="space-y-2 mt-auto">
                       <p className="text-[10px] text-gray-500 uppercase tracking-widest font-bold">Director</p>
                       <p className="text-sm font-medium text-gray-300 mb-3">{MOVIE_DATA.next.director}</p>
-                      
                       <p className="text-[10px] text-gray-500 uppercase tracking-widest font-bold">Cast</p>
                       <p className="text-sm font-medium text-gray-300">{MOVIE_DATA.next.actors}</p>
                    </div>
@@ -955,6 +963,72 @@ export default function App() {
              </div>
           </div>
         </section>
+
+        {/* Section 5: 아카이브 (지난 상영작 & 감상평) */}
+        {MOVIE_DATA.past && MOVIE_DATA.past.length > 0 && (
+          <section id="archive" className="scroll-mt-24 pb-12 pt-8 border-t border-dashed border-[#144950]">
+             <div className="flex items-center gap-3 mb-6">
+               <span className="w-8 h-px bg-gradient-to-r from-[#d4af37] to-transparent opacity-40"></span>
+               <h2 className="text-xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-[#d4af37] to-[#aa801e] uppercase tracking-widest flex items-center gap-2">
+                 지난 상영작 감상평 보기
+               </h2>
+            </div>
+            
+            <p className="text-xs text-gray-500 mb-4 ml-1">포스터를 터치하시면 그날의 감동을 다시 꺼내볼 수 있습니다.</p>
+            <div className="flex overflow-x-auto gap-4 pb-4 custom-scrollbar">
+              {MOVIE_DATA.past.map(movie => (
+                <button
+                  key={movie.titleKo}
+                  onClick={() => setSelectedPastMovie(movie.titleKo === selectedPastMovie?.titleKo ? null : movie)}
+                  className={`flex-shrink-0 w-28 md:w-32 transition-all duration-300 text-left ${selectedPastMovie?.titleKo === movie.titleKo ? 'scale-105' : 'opacity-60 hover:opacity-100'}`}
+                >
+                  <div className={`w-full aspect-[2/3] rounded-xl overflow-hidden mb-2 ${selectedPastMovie?.titleKo === movie.titleKo ? 'ring-2 ring-[#d4af37] shadow-[0_0_15px_rgba(212,175,55,0.4)]' : ''}`}>
+                    <img src={movie.posterUrl} className="w-full h-full object-cover" alt={movie.titleKo} />
+                  </div>
+                  <p className={`text-[10px] md:text-xs font-bold truncate w-full px-1 ${selectedPastMovie?.titleKo === movie.titleKo ? 'text-[#d4af37]' : 'text-gray-400'}`}>
+                    {movie.titleKo}
+                  </p>
+                </button>
+              ))}
+            </div>
+
+            {/* 선택된 과거 영화의 감상평 목록 */}
+            {selectedPastMovie && (
+               <div className="mt-6 bg-gradient-to-br from-[#03252a] to-[#011619] p-6 rounded-3xl border border-[#d4af37] border-opacity-50 shadow-lg animate-in slide-in-from-top-4 fade-in">
+                   <h3 className="text-[#fbf5b7] font-bold mb-4 flex items-center gap-2 border-b border-[#144950] pb-3">
+                      <History className="w-5 h-5 text-[#d4af37]" /> [{selectedPastMovie.titleKo}] 감상평
+                   </h3>
+                   <div className="space-y-4 max-h-[400px] overflow-y-auto custom-scrollbar pr-2">
+                      {pastComments.length === 0 ? (
+                          <p className="text-gray-500 text-sm text-center py-8">이 영화에는 남겨진 감상평이 없습니다.</p>
+                      ) : (
+                          pastComments.map(comment => (
+                              <div key={comment.id} className="bg-[#011214] p-4 rounded-2xl border border-[#144950] relative group">
+                                 <div className="flex justify-between mb-3">
+                                     <div className="flex items-center gap-2 flex-wrap">
+                                       <span className="font-bold text-[#fbf5b7] text-sm">{comment.nickname}</span>
+                                     </div>
+                                     <div className="flex gap-0.5 ml-2">
+                                       {[1,2,3,4,5].map(s => <Star key={s} className={`w-3 h-3 ${comment.rating >= s ? 'text-[#d4af37] fill-[#d4af37]' : 'text-[#144950]'}`} />)}
+                                     </div>
+                                  </div>
+                                  <p className="text-sm text-gray-300 whitespace-pre-wrap">{comment.text}</p>
+                                  <div className="flex justify-between items-center mt-3">
+                                    <span className="text-[10px] text-[#d4af37] opacity-60 font-mono tracking-wider">
+                                      {new Date(comment.timestamp).toLocaleString('ko-KR', { year:'numeric', month: '2-digit', day: '2-digit' })}
+                                    </span>
+                                    {comment.phone === appUser.phone && (
+                                      <button onClick={() => deleteComment(comment.id, selectedPastMovie.titleKo)} className="text-xs text-gray-500 hover:text-red-400">삭제</button>
+                                    )}
+                                  </div>
+                              </div>
+                          ))
+                      )}
+                   </div>
+               </div>
+            )}
+          </section>
+        )}
 
       </main>
       
@@ -982,7 +1056,6 @@ export default function App() {
       {isChatOpen && (
         <div className="fixed bottom-24 right-4 md:right-6 w-[calc(100%-2rem)] md:w-96 bg-gradient-to-b from-[#03252a] to-[#011619] rounded-3xl shadow-[0_20px_50px_rgba(0,0,0,0.8)] border border-[#d4af37] border-opacity-40 z-50 overflow-hidden flex flex-col h-[500px] max-h-[70vh] animate-in slide-in-from-bottom-10 fade-in duration-300">
           
-          {/* 채팅방 헤더 (무음 토글 버튼 추가됨) */}
           <div className="p-4 bg-[#021a1d] border-b border-[#144950] flex justify-between items-center shadow-md">
             <h3 className="text-[#fbf5b7] font-bold flex items-center gap-2 text-sm tracking-widest">
               <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
@@ -1000,7 +1073,6 @@ export default function App() {
             </div>
           </div>
 
-          {/* 대화창 영역 */}
           <div className="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar">
             {chatMessages.length === 0 ? (
               <p className="text-center text-gray-500 text-xs mt-10">채팅방이 조용합니다. 첫 인사를 건네보세요!</p>
@@ -1032,7 +1104,6 @@ export default function App() {
             <div ref={messagesEndRef} />
           </div>
 
-          {/* 채팅 입력 영역 */}
           <div className="p-3 bg-[#011214] border-t border-[#144950]">
             <form onSubmit={sendChatMessage} className="flex gap-2">
               <input
