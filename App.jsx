@@ -10,26 +10,26 @@ const BLOCKED_NUMBERS = ["9999", "0000", "1234"];
 // --- 관리자 설정 (영화 정보 및 포스터 변경) ---
 const MOVIE_DATA = {
   current: {
-    titleKo: "화양연화",
-    titleEn: "In the Mood for Love",
-    year: "2000",
-    director: "왕가위",
-    actors: "양조위, 장만옥",
-    quote: "가장 아름답고 찬란했던 시절, 그들의 비밀스러운 로맨스",
-    date: "2026년 6월 29일 (월) 오후 7:30",
-    location: "연신내 아지트",
-    posterUrl: "https://media.themoviedb.org/t/p/w220_and_h330_face/yCKaf65zoySg2iJdsews4Rafl7C.jpg"
-  },
-  next: {
     titleKo: "그 시절, 우리가 사랑했던 소녀",
     titleEn: "You Are the Apple of My Eye",
     year: "2011",
     director: "구파도",
     actors: "가진동, 천옌시",
-    quote: "그 시절, 우리가 사랑했던 소녀",
-    date: "2026년 7월 6일 (수) 오후 7:30",
+    quote: "눈부시게 찬란했던 17살, 내 청춘 안에는 늘 네가 있었어",
+    date: "2026년 7월 6일 (월) 오후 7:30",
     location: "연신내 아지트",
     posterUrl: "https://media.themoviedb.org/t/p/w300_and_h450_face/ynLYtNB3AOiDX4Ltr1uMea8oNHM.jpg"
+  },
+  next: {
+    titleKo: "프렌치 디스페치",
+    titleEn: "The French Dispatch",
+    year: "2021",
+    director: "웨스 앤더슨",
+    actors: "빌 머레이, 틸다 스윈튼, 티모시 샬라메",
+    quote: "독보적인 미장센, 저널리스트들을 향한 아름다운 러브레터",
+    date: "2026년 7월 13일 (월) 오후 7:30",
+    location: "연신내 아지트",
+    posterUrl: "https://media.themoviedb.org/t/p/w300_and_h450_face/6nS7g1zIqA4VtozC4L2s1E6B9V1.jpg"
   }
 };
 
